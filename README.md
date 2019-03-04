@@ -1,5 +1,3 @@
-# FewshotLearning
-
 In this repo, we reproduced some few-shot learning methods which are 
 
 1. Prototypical Network for Few-shot Learning (https://arxiv.org/abs/1703.05175)
@@ -40,5 +38,4 @@ Prototnet
 
 5way-1shot : 50.556 (0.834)
 5way-5shot : 66.747 (0.659)
-
 

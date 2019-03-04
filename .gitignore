@@ -1,0 +1,7 @@
+models
+miniImagenet
+__pycache__/
+*.pyc
+
+models/
+data_npy/

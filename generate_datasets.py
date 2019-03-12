@@ -22,45 +22,6 @@ def parse_args():
 args = parse_args()
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
-
-if args.dataset_name == 'miniImagenet_cy':
-    # downloaded from
-    # https://github.com/cyvius96/prototypical-network-pytorch
-    # download in data_root/dataset_name unzip images.zip
-    imgs_root = os.path.join(args.data_root, args.dataset_name, 'images')
-    if not os.path.exists(imgs_root):
-        print ('no images in {}'.format(imgs_root))
-        print ('download images from https://github.com/cyvius96/prototypical-network-pytorch')
-        exit()
-    csv_files = ['csv/{}.csv'.format(t) for t in ['train', 'val', 'test']]
-
-    for dsettype in ['train', 'val', 'test']:
-        csv_file = 'csv/{}.csv'.format(dsettype)
-        print ('processing {}'.format(csv_file))
-        lines = [x.strip() for x in open(csv_file, 'r').readlines()][1:]
-        all_classes = []
-        for line in lines:
-            clsname = line.split(',')[-1]
-            if not clsname in all_classes:
-                all_classes.append(clsname)
-
-        data_stacks = [[] for _ in range(len(all_classes))]
-        for ii, line in enumerate(lines):
-            imgpath, clsname = line.split(',')
-            img = cv2.imread(os.path.join(imgs_root, imgpath))
-            img = cv2.resize(img, (84,84), interpolation=cv2.INTER_LANCZOS4)
-            data_stacks[all_classes.index(clsname)].append(img)
-
-            if ii % 1000 == 0:
-                print ('{:5d} / {:5d}'.format(ii, len(lines)))
-        
-        dataset_output_path = os.path.join(args.output_path, args.dataset_name)
-        if not os.path.exists(dataset_output_path):
-            os.makedirs(dataset_output_path)
-        outfile_name = os.path.join(dataset_output_path, dsettype + '.npy')
-        np.save(outfile_name, np.array(data_stacks))
-        print ('saved in {}'.format(outfile_name))
-
  
 if args.dataset_name == 'miniImagenet':
     # miniImagenet pkl file can be downloaded from
@@ -79,13 +40,12 @@ if args.dataset_name == 'miniImagenet':
             img = data['image_data'][value]
             out_data.append(img)
 
-        dataset_output_path = os.path.join(args.output_path, args.dataset_name)
+        dataset_output_path = os.path.join(args.output_path, dsettype)
         if not os.path.exists(dataset_output_path):
             os.makedirs(dataset_output_path)
-        outfile_name = os.path.join(dataset_output_path, dsettype + '.npy')
+        outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
         np.save(outfile_name, np.array(out_data))
         print ('saved in {}'.format(outfile_name))
-
 
 if args.dataset_name == 'tieredImagenet':
     # tieredImagenet pkl file can be downloaded from
@@ -111,9 +71,9 @@ if args.dataset_name == 'tieredImagenet':
         for i in num_classes:
             out_data.append(images[labsp==i])
 
-        dataset_output_path = os.path.join(args.output_path, args.dataset_name)
+        dataset_output_path = os.path.join(args.output_path, dsettype)
         if not os.path.exists(dataset_output_path):
             os.makedirs(dataset_output_path)
-        outfile_name = os.path.join(dataset_output_path, dsettype + '.npy')
+        outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
         np.save(outfile_name, np.array(out_data))
         print ('saved in {}'.format(outfile_name))

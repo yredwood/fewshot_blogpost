@@ -1,3 +1,6 @@
+import sys, os
+sys.path.append('../') 
+
 import tensorflow as tf 
 import numpy as np 
 import argparse
@@ -6,9 +9,10 @@ import os
 import pdb
 from lib.episode_generator import EpisodeGenerator
 from lib.networks import MAMLNet
+from config.loader import load_config
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='normalized protonet')
+    parser = argparse.ArgumentParser(description='MAML')
     parser.add_argument('--init', dest='initial_step', default=0, type=int) 
     parser.add_argument('--maxi', dest='max_iter', default=30000, type=int)
     parser.add_argument('--qs', dest='qsize', default=15, type=int)
@@ -17,8 +21,8 @@ def parse_args():
     parser.add_argument('--showi', dest='show_step', default=100, type=int)
     parser.add_argument('--savei', dest='save_step', default=5000, type=int)
     parser.add_argument('--pr', dest='pretrained', default=False, type=bool)
-    parser.add_argument('--data', dest='dataset_dir', default='../miniImagenet')
-    parser.add_argument('--model', dest='model_dir', default='models')
+    parser.add_argument('--data', dest='dataset_dir', default='../data_npy')
+    parser.add_argument('--model', dest='model_dir', default='../models')
     parser.add_argument('--dset', dest='dataset_name', default='miniImagenet')
     parser.add_argument('--name', dest='model_name', default='mamlnet')
     parser.add_argument('--parm', dest='param_str', default='default')
@@ -28,6 +32,8 @@ def parse_args():
     parser.add_argument('--vali', dest='val_iter', default=50, type=int)
     parser.add_argument('--train', dest='train', default=1, type=int)
     parser.add_argument('--resume', dest='resume', default=None)
+    parser.add_argument('--config', dest='config', default='miniimg')
+    parser.add_argument('--tk', dest='test_kshot', default=10, type=int)
     parser.add_argument('--stop_grad', dest='stop_grad', default=0, type=int)
     parser.add_argument('--ini', dest='inner_loop_iter', 
             default=5, type=int)
@@ -36,11 +42,12 @@ def parse_args():
 
 def validate(test_net, ep_test):
     val_losses, val_accs = [], []
+    test_kshot = args.test_kshot if args.test_kshot else args.kshot
     np.random.seed(2)
     for _ in range(args.val_iter):
         sx, sy, qx, qy = [], [], [], []
         for _ in range(1): # only one meta-batch
-            sxt, syt, qxt, qyt = ep_test.get_episode(nway, kshot, qsize)
+            sxt, syt, qxt, qyt = ep_test.get_episode(nway, test_kshot, qsize)
             sx.append(sxt)
             sy.append(syt)
             qx.append(qxt)
@@ -51,6 +58,7 @@ def validate(test_net, ep_test):
                 ip['qx']: qx, ip['qy']: qy,
                 ip['lr_alpha']: args.inner_lr}
         op = test_net.outputs
+        #pdb.set_trace()
         run_list = [op['accuracy'], op['lossb']]
         
         acc, loss_b = sess.run(run_list, feed_dict)
@@ -70,7 +78,7 @@ if __name__=='__main__':
     print ('args::') 
     if args.kshot == 1:
         args.meta_batch_size = 4
-    if args.kshot == 5:
+    else:
         args.meta_batch_size = 2
     for arg in vars(args):
         print ('%15s: %s'%(arg, getattr(args, arg)))
@@ -79,6 +87,9 @@ if __name__=='__main__':
     nway = args.nway
     kshot = args.kshot
     qsize = args.qsize 
+    config = load_config(args.config)
+
+    test_kshot = args.test_kshot if args.test_kshot else kshot
     
     if args.train:
         mamlnet = MAMLNet(args.model_name, nway, kshot, qsize, 
@@ -87,7 +98,7 @@ if __name__=='__main__':
             stop_grad=args.stop_grad)
         # build trainnet only when is needed
 
-    test_net = MAMLNet(args.model_name, nway, kshot, qsize, mbsize=1,
+    test_net = MAMLNet(args.model_name, nway, test_kshot, qsize, mbsize=1,
             reuse=True if args.train else False, inner_loop_iter=10, isTr=False)
         
     sess = tf.Session() 
@@ -99,8 +110,8 @@ if __name__=='__main__':
         print ('restore from at : {}'.format(args.resume))
         saver.restore(sess, args.resume)
 
-    ep_train = EpisodeGenerator(args.dataset_dir, 'train')
-    ep_test = EpisodeGenerator(args.dataset_dir, 'test')
+    ep_train = EpisodeGenerator(args.dataset_dir, 'train', config)
+    ep_test = EpisodeGenerator(args.dataset_dir, 'test', config)
 
     vlist = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
     for i, v in enumerate(vlist):
@@ -114,7 +125,7 @@ if __name__=='__main__':
 
             sx = []; sy = []; qx = []; qy = []
             for _ in range(args.meta_batch_size):
-                sxt, syt, qxt, qyt = ep_train.get_episode(nway, kshot, qsize)
+                sxt, syt, qxt, qyt = ep_train.get_episode(nway, test_kshot, qsize)
                 sx.append(sxt)
                 sy.append(syt) 
                 qx.append(qxt) 

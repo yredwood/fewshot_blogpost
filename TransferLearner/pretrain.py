@@ -7,52 +7,45 @@ import argparse
 import time
 import pdb
 
-from lib.episode_generator import EpisodeGenerator
-from lib.networks import ProtoNet 
+from lib.episode_generator import BatchGenerator
+from lib.networks import TransferNet
 from config.loader import load_config
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='protonet')
+    parser = argparse.ArgumentParser(description='pretrain the network')
     parser.add_argument('--init', dest='initial_step', default=0, type=int) 
     parser.add_argument('--maxe', dest='max_epoch', default=100, type=int)
-    parser.add_argument('--qs', dest='qsize', default=15, type=int)
-    parser.add_argument('--nw', dest='nway', default=5, type=int)
-    parser.add_argument('--ks', dest='kshot', default=1, type=int)
     parser.add_argument('--sh', dest='show_epoch', default=1, type=int)
     parser.add_argument('--sv', dest='save_epoch', default=10, type=int)
     parser.add_argument('--pr', dest='pretrained', default=False, type=bool)
     parser.add_argument('--data', dest='dataset_dir', default='../data_npy')
     parser.add_argument('--model', dest='model_dir', default='../models')
     parser.add_argument('--dset', dest='dataset_name', default='miniImagenet')
-    parser.add_argument('--name', dest='model_name', default='protonet')
+    parser.add_argument('--name', dest='model_name', default='transfer_pretrain')
     parser.add_argument('--lr', dest='lr', default=1e-3, type=float)
     parser.add_argument('--train', dest='train', default=1, type=int)
     parser.add_argument('--vali', dest='val_iter', default=60, type=int)
     parser.add_argument('--config', dest='config', default='miniimg')
-    parser.add_argument('--tk', dest='test_kshot', default=0, type=int)
+    parser.add_argument('--bs', dest='batch_size', default=32)
     args = parser.parse_args()
     return args
 
-def validate(test_net, test_gen):
-    accs, losses = [], []
-    #np.random.seed(299)
-    test_kshot = args.kshot if args.test_kshot==0 else args.test_kshot
-    for _ in range(args.val_iter):
-        sx, sy, qx, qy = test_gen.get_episode(5, test_kshot, args.qsize)
-        fd = {\
-            test_net.inputs['sx']: sx,
-            test_net.inputs['qx']: qx,
-            test_net.inputs['qy']: qy}
-        outputs = [test_net.outputs['acc'], test_net.outputs['loss']]
-        acc, loss = sess.run(outputs, fd)
+def validate(net, dataset):
+    accs, losss = [], [] 
+    for i in range(args.val_iter):
+        x, y = dataset.get_batch(args.batch_size, 'val')
+        fd = {net.inputs['x']: x, net.inputs['y']: y, lr_ph: lr}
+        runs = [net.outputs['acc'], net.outputs['loss']]
+        acc, loss = sess.run(runs, fd)
         accs.append(acc)
-        losses.append(loss)
-    print ('Validation - ACC: {:.3f} ({:.3f})'
-        '| LOSS: {:.3f}   '\
-        .format(np.mean(accs) * 100., 
-        np.std(accs) * 100. * 1.96 / np.sqrt(args.val_iter),
-        np.mean(losses)))
-#    np.random.seed()
+        losss.append(loss)
+
+    print ('Validation - Acc: {:.3f} ({:.3f})'
+        ' | Loss {:.3f} '\
+        .format(np.mean(accs)*100,
+            np.std(accs)*100.*1.96/np.sqrt(args.val_iter),
+            np.mean(losss)))
+
 
 if __name__=='__main__': 
     args = parse_args() 
@@ -62,23 +55,16 @@ if __name__=='__main__':
         print ('%15s: %s'%(arg, getattr(args, arg)))
     print ('='*50) 
 
-    nway = args.nway
-    kshot = args.kshot 
-    qsize = args.qsize 
-    test_kshot = args.kshot if args.test_kshot==0 else args.test_kshot
-
+    config = load_config(args.config)
+    dataset = BatchGenerator(args.dataset_dir, 'train', config)
     lr_ph = tf.placeholder(tf.float32) 
-    protonet = ProtoNet(args.model_name, nway, test_kshot, qsize, isTr=True)
-    loss = protonet.outputs['loss']
-    acc = protonet.outputs['acc']
-    
-    # only evaluates 5way - kshot
-    test_net = ProtoNet(args.model_name, 5, test_kshot, qsize, isTr=False, reuse=True)
+    trainnet = TransferNet(args.model_name, dataset.n_classes, isTr=True)
+    testnet = TransferNet(args.model_name, dataset.n_classes, isTr=False, reuse=True)
 
     opt = tf.train.AdamOptimizer(lr_ph) 
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(loss) 
+        train_op = opt.minimize(trainnet.outputs['loss']) 
     saver = tf.train.Saver()
     
     sess = tf.Session()
@@ -89,26 +75,22 @@ if __name__=='__main__':
                 args.dataset_name + '.ckpt')
         saver.restore(sess, loc)
     
-    config = load_config(args.config)
-    train_gen = EpisodeGenerator(args.dataset_dir, 'train', config)
-    test_gen = EpisodeGenerator(args.dataset_dir, 'test', config)
     if args.train:
-        max_iter = train_gen.dataset_size[args.dataset_name] * args.max_epoch \
-                // (nway * qsize)
+        max_iter = dataset.dataset_size[args.dataset_name] * args.max_epoch \
+                // (args.batch_size)
         show_step = args.show_epoch * max_iter // args.max_epoch
         save_step = args.save_epoch * max_iter // args.max_epoch
         avger = np.zeros([4])
         for i in range(1, max_iter+1): 
             stt = time.time()
-            cur_epoch = i * (nway * qsize) // train_gen.dataset_size[args.dataset_name]
+            cur_epoch = i * args.batch_size // dataset.dataset_size[args.dataset_name]
             lr = args.lr if i < 0.7 * max_iter else args.lr*.1
-            sx, sy, qx, qy = train_gen.get_episode(nway, kshot, qsize)
-            fd = {\
-                protonet.inputs['sx']: sx,
-                protonet.inputs['qx']: qx,
-                protonet.inputs['qy']: qy,
-                lr_ph: lr}
-            p1, p2, _ = sess.run([acc, loss, train_op], fd)
+
+            x, y = dataset.get_batch(args.batch_size, 'train')
+            fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr}
+            runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], train_op]
+            p1, p2, _ = sess.run(runs, fd)
+
             avger += [p1, p2, 0, time.time() - stt] 
 
             if i % show_step == 0 and i != 0: 
@@ -121,7 +103,7 @@ if __name__=='__main__':
                     '| in {:.2f} secs '\
                     .format(avger[0], 
                         avger[1], lr, avger[3]*show_step))
-                validate(test_net, test_gen)
+                validate(testnet, dataset)
                 avger[:] = 0
 
             if i % save_step == 0 and i != 0: 
@@ -131,4 +113,4 @@ if __name__=='__main__':
                 print ('saved at : {}'.format(out_loc))
                 saver.save(sess, out_loc)
     else: # if test only
-        validate(test_net, test_gen)
+        validate(testnet, dataset)

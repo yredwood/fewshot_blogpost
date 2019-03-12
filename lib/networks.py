@@ -2,9 +2,39 @@ import tensorflow as tf
 import os
 import pdb
 
+relu = tf.nn.relu
+elu = tf.nn.elu
+normal = tf.distributions.Normal
+kldv = tf.distributions.kl_divergence
+
 class Network(object):
     def __init__(self, name):
         self.name = name
+        self.eps = 1e-3
+
+    def dense(self, x, units, name='dense', reuse=None):
+        with tf.variable_scope(name, reuse=reuse):
+            kernel = tf.get_variable('kernel', [x.shape[1].value, units])
+            bias = tf.get_variable('bias', [units],
+                    initializer=tf.zeros_initializer())
+            x = tf.matmul(x, kernel) + bias
+            return x
+
+    def conv(self, x, filters, kernel_size=3, strides=1, padding='SAME',
+            name='conv', reuse=None):
+        with tf.variable_scope(name, reuse=reuse):
+            kernel = tf.get_variable('kernel',
+                    [kernel_size, kernel_size, x.shape[1].value, filters])
+            x = tf.nn.conv2d(x, kernel, [1, 1, strides, strides],
+                    padding=padding, data_format='NCHW')
+            return x
+
+    def deconv(self, x, filters, kernel_size=3, strides=1, padding='SAME', 
+            name='deconv', reuse=None):
+        with tf.variable_scope(name, reuse=reuse):
+            x = tf.layers.conv2d_transpose(x, filters, kernel_size, strides, data_format='channels_first',
+                    reuse=reuse, padding=padding)
+            return x
 
     def batch_norm(self, x, training, decay=0.9, name='batch_norm', reuse=None):
         with tf.variable_scope(name, reuse=reuse):
@@ -30,9 +60,105 @@ class Network(object):
                         data_format='NCHW')
             return x
 
+    def global_avg_pool(self, x):
+        return tf.reduce_mean(x, [2, 3])
+
+    def simple_conv(self, in_x, reuse=False, isTr=True):
+        def conv_block(x, name, reuse, isTr):
+            x = self.conv(x, 64, name=name+'/conv', reuse=reuse)
+            x = self.batch_norm(x, isTr, name=name+'/bn', reuse=reuse)
+            x = relu(x)
+            x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+            return x
+        x = in_x
+        for i in range(4):
+            x = conv_block(x, 'b{}'.format(i+1), reuse=reuse, isTr=isTr)
+        x = tf.layers.flatten(x)
+        return x
+
+class TransferNet(Network):
+    def __init__(self, name, n_classes, isTr, reuse=False, 
+            input_dict=None):
+        self.name = name
+        self.n_classes = n_classes
+        if input_dict is None:
+            self.inputs = {\
+                    'x': tf.placeholder(tf.float32, [None,84,84,3]),
+                    'y': tf.placeholder(tf.float32, [None,n_classes])
+                    }
+        else:
+            self.inputs = input_dict
+
+        self.outputs = {}
+        with tf.variable_scope(name):
+            self._build_network(isTr, reuse)
+    
+    def _build_network(self, isTr, reuse):
+        
+        x = tf.transpose(self.inputs['x'], [0,3,1,2])
+        f = self.simple_conv(x, reuse=reuse, isTr=isTr)
+        pred = self.dense(f, self.n_classes, name='trtask_dense', reuse=reuse)
+        loss = cross_entropy(tf.nn.softmax(pred), self.inputs['y'])
+        acc = tf_acc(pred, self.inputs['y'])
+
+        self.outputs['embedding'] = f
+        self.outputs['pred'] = pred
+        self.outputs['loss'] = loss
+        self.outputs['acc'] = acc
+
+
+class ProtoNet(Network):
+    def __init__(self, name, nway, kshot, qsize, isTr, reuse=False):
+        self.name = name
+        self.nway = nway
+        self.kshot = kshot
+        self.qsize = qsize
+        self.hdim = 1600
+
+        self.inputs = {\
+                'sx': tf.placeholder(tf.float32, [None,84,84,3]),
+                'qx': tf.placeholder(tf.float32, [None,84,84,3]),
+                'qy': tf.placeholder(tf.float32, [None,None]),
+                'lr': tf.placeholder(tf.float32),
+                'tr': tf.placeholder(tf.bool)}
+        self.outputs = {}
+
+        with tf.variable_scope(name):
+            self._build_network(isTr, reuse=reuse)
+
+    def _build_network(self, isTr, reuse):
+        ip = self.inputs
+        sq_inputs = tf.concat([ip['sx'], ip['qx']], axis=0)
+        sq_outputs = self.base_cnn(sq_inputs, isTr=isTr, reuse=reuse) 
+#        if True:
+#            sq_outputs = sq_outputs / (tf.norm(sq_outputs, axis=1, 
+#                keepdims=True) + 1e-8) * 1e+1
+        support_h = sq_outputs[:self.nway*self.kshot]
+        query_h = sq_outputs[self.nway*self.kshot:]
+
+        proto_vec = tf.reshape(support_h, [self.nway, -1, self.hdim]) 
+        proto_vec = tf.reduce_mean(proto_vec, axis=1)
+
+        _p = tf.expand_dims(proto_vec, axis=0)
+        _q = tf.expand_dims(query_h, axis=1)
+        embedding = (_p - _q)**2 
+        dist = tf.reduce_mean(embedding, axis=2)
+#        dist = tf.reduce_sum(proto_vec * query_vec, axis=1)
+        prediction = tf.nn.softmax(-dist)
+    
+        self.outputs['embedding'] = embedding
+        self.outputs['pred'] = prediction
+        self.outputs['loss'] = cross_entropy(prediction, ip['qy']) 
+        self.outputs['acc'] = tf_acc(prediction, ip['qy'])
+
+    def base_cnn(self, in_x, isTr, reuse=False):
+        in_x = tf.transpose(in_x, [0,3,1,2])
+        return self.simple_conv(in_x, reuse=reuse, isTr=isTr)
+
+
 class MAMLNet(Network):
     def __init__(self, name, nway, kshot, qsize, mbsize, norm=False, reuse=False, 
-            inner_loop_iter=5, stop_grad=True, isTr=True):
+            inner_loop_iter=5, stop_grad=True, isTr=True, input_dict=None):
         self.name = name
         self.nway = nway
         self.kshot = kshot
@@ -41,26 +167,31 @@ class MAMLNet(Network):
         self.norm = norm 
         self.inner_loop_iter = inner_loop_iter
         self.stop_grad = stop_grad
+        self.hdim = 800
         
-        self.inputs = {\
-                'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3], 
-                    name='ph_sx'),
-                'sy': tf.placeholder(tf.float32, [mbsize,nway*kshot,nway],
-                    name='ph_sy'),
-                'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3],
-                    name='ph_qx'),
-                'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway],
-                    name='ph_qy'),
-                'tr': tf.placeholder(tf.bool, name='ph_isTr'),
-                'lr_alpha': tf.placeholder(tf.float32, [], name='ph_alpha'),
-                'lr_beta': tf.placeholder(tf.float32, [], name='ph_beta')}
+        if input_dict is None:
+            self.inputs = {\
+                    'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3], 
+                        name='ph_sx'),
+                    'sy': tf.placeholder(tf.float32, [mbsize,nway*kshot,nway],
+                        name='ph_sy'),
+                    'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3],
+                        name='ph_qx'),
+                    'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway],
+                        name='ph_qy'),
+                    'tr': tf.placeholder(tf.bool, name='ph_isTr'),
+                    'lr_alpha': tf.placeholder(tf.float32, [], name='ph_alpha'),
+                    'lr_beta': tf.placeholder(tf.float32, [], name='ph_beta')}
+        else:
+            self.inputs = input_dict
 
         self.outputs = {\
                 'preda': None,
                 'predb': None,
                 'lossa': None,
                 'lossb': None,
-                'accuracy': None}
+                'accuracy': None,
+                'embedding': None}
 
             
         with tf.variable_scope(self.name, reuse=reuse):
@@ -79,7 +210,7 @@ class MAMLNet(Network):
             # sy.shape : (nk, n)  / qy.shape : (nq, n)
             lossbs, predbs = [], []
             preda = self.forward(sx, weights, reuse=True)
-            lossa = tf.reduce_mean(cross_entropy(preda, sy))
+            lossa = tf.reduce_mean(ce_logit(preda, sy))
             grads = tf.gradients(lossa, list(weights.values()))
             if self.stop_grad:
                 grads = [tf.stop_gradient(grad) for grad in grads]
@@ -88,14 +219,14 @@ class MAMLNet(Network):
                 [weights[key] - ip['lr_alpha'] * gradients[key] \
                         for key in weights.keys()]))
             predb = self.forward(qx, adapted_weights, reuse=True)
-            lossb = cross_entropy(predb, qy)
+            lossb = ce_logit(predb, qy)
 
             predbs.append(predb)
             lossbs.append(lossb)
 
             for _ in range(self.inner_loop_iter - 1):
-                preda = self.forward(sx, adapted_weights, reuse=True)
-                lossa = tf.reduce_mean(cross_entropy(preda, sy))
+                preda, emba = self.forward(sx, adapted_weights, reuse=True, get_emb=True)
+                lossa = tf.reduce_mean(ce_logit(preda, sy))
                 grads = tf.gradients(lossa, list(adapted_weights.values()))
                 if self.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
@@ -103,37 +234,37 @@ class MAMLNet(Network):
                 adapted_weights = dict(zip(adapted_weights.keys(),
                     [adapted_weights[key] - ip['lr_alpha'] * gradients[key] \
                             for key in adapted_weights.keys()]))
-                predb = self.forward(qx, adapted_weights, reuse=True)
-                lossb = cross_entropy(predb, qy)
+                predb, embb = self.forward(qx, adapted_weights, reuse=True, get_emb=True)
+                lossb = ce_logit(predb, qy)
 
                 predbs.append(predb)
                 lossbs.append(lossb)
             # predbs.shape = (# of inner iter, nq, n)
             # lossbs.shape = (# of inner iter, nq)
-            return predbs, lossbs
+            return predbs, lossbs, emba, embb
 
         elems = (ip['sx'], ip['sy'], ip['qx'], ip['qy'])
         out_dtype = ([tf.float32]*self.inner_loop_iter,
-                [tf.float32]*self.inner_loop_iter)
-        meta_predbs, meta_lossbs = \
+                [tf.float32]*self.inner_loop_iter, tf.float32, tf.float32)
+        meta_predbs, meta_lossbs, meta_emba, meta_embb = \
                 tf.map_fn(singlebatch_graph, elems, dtype=out_dtype,
                 parallel_iterations=self.mbsize)
 
-        # loop version doesn't work at all. Don't know why
-#        lvmeta_predbs, lvmeta_lossbs = [], []
-#        for mbi in range(self.mbsize):
-#            predbs, lossbs = singlebatch_graph((ip['sx'][mbi],
-#                    ip['sy'][mbi], ip['qx'][mbi], ip['qy'][mbi]))
-#            lvmeta_lossbs.append(lossbs)
-#            lvmeta_predbs.append(predbs)
-#        meta_lossbs = tf.transpose(lvmeta_lossbs, [1,0,2])
-#        meta_predbs = tf.transpose(lvmeta_predbs, [1,0,2,3])
-
         # meta_predbs.shape = (#inner_loop, meta_batch, nq, n)
         # meta_lossbs.shape = (#inner_loop, meta_batch, nq)
+        # meta_emba.shape = (meta_batch, nk, hdim)
+        # meta_embb.shape = (meta_batch, nq, hdim)
+        _p = tf.reshape(meta_emba, [self.mbsize,self.nway,self.kshot,self.hdim])
+        _p = tf.reduce_mean(_p, axis=2)
+        _p = tf.expand_dims(_p, axis=1) # (mb, 1, n, h)
+
+        _q = tf.expand_dims(meta_embb, 2) # (mb, nk, 1, h)
+        embedding = (_p - _q)**2
+
         
         self.outputs['predb'] = meta_predbs
         self.outputs['lossb'] = meta_lossbs 
+        self.outputs['embedding'] = embedding
         #self.outputs['lossa'] = meta_lossas
         # lossb (metabatch, innerup, nq)
 
@@ -144,7 +275,6 @@ class MAMLNet(Network):
             gvs = [(tf.clip_by_value(grad, -10, 10), var) for grad, var in gvs]
             self.train_op = opt.apply_gradients(gvs)
             self.gvs = gvs
-    
 
         self.outputs['accuracy'] = \
                 [tf_acc(meta_predbs[-1][mi], ip['qy'][mi]) \
@@ -168,66 +298,37 @@ class MAMLNet(Network):
                     [3,3,32,32], initializer=conv_init, dtype=f32)
             weights['bias{}'.format(i)] = tf.get_variable('bias{}'.format(i),
                     initializer=tf.zeros([32]))
-#            weights['beta{}'.format(i)] = tf.get_variable('beta{}'.format(i),
-#                    initializer=tf.zeros([32]))
-#            weights['gamma{}'.format(i)] = tf.get_variable('gamma{}'.format(i),
-#                    initializer=tf.ones([32]))
-
         weights['w5'] = tf.get_variable('w5', 
                 [32*5*5, self.nway], initializer=fc_init)
         weights['b5'] = tf.get_variable('b5',
                 initializer=tf.zeros([self.nway]))
         return weights
 
-    def forward(self, x, weights, reuse=False, scope=''):
-
+    def forward(self, x, weights, reuse=False, scope='', get_emb=False):
         def conv(x, w, b, reuse, scope):
             h = tf.nn.conv2d(x, w, [1,1,1,1], 'SAME') + b
             h = tf.contrib.layers.batch_norm(h, activation_fn=tf.nn.relu,
                     reuse=reuse, scope=scope)
-            #h = batch_norm(h, True, name=scope+'bn', reuse=reuse)
-            #h, _, _ = tf.nn.fused_batch_norm(h, gamma, beta)
             return tf.nn.max_pool(h, [1,2,2,1], [1,2,2,1], 'VALID')
     
         for i in range(1, 5):
             x = conv(x, weights['conv{}'.format(i)], weights['bias{}'.format(i)],
                     reuse, scope+'{}'.format(i))
-                    #weights['beta{}'.format(i)], weights['gamma{}'.format(i)], 
         dim = 1
         for s in x.get_shape().as_list()[1:]:
             dim *= s
         x = tf.reshape(x, [-1, dim])
+        x = x / (tf.norm(x, axis=1, keep_dims=True) + 1e-8) * 1e+1
         out = tf.matmul(x, weights['w5']) + weights['b5']
+        if get_emb:
+            return out, x
         return out
 
+def ce_logit(pred, label):
+    return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label)
 
-#def batch_norm(x, training, decay=0.9, name='batch_norm', reuse=None):
-#    with tf.variable_scope(name, reuse=reuse):
-#        dim = x.shape[-1].value
-#        moving_mean = tf.get_variable('moving_mean', [dim],
-#                initializer=tf.zeros_initializer(), trainable=False)
-#        moving_var = tf.get_variable('moving_var', [dim],
-#                initializer=tf.ones_initializer(), trainable=False)
-#        beta = tf.get_variable('beta', [dim],
-#                initializer=tf.zeros_initializer())
-#        gamma = tf.get_variable('gamma', [dim],
-#                initializer=tf.ones_initializer())
-#        if training:
-#            x, batch_mean, batch_var = tf.nn.fused_batch_norm(x, gamma, beta, data_format='NHWC')
-#            update_mean = moving_mean.assign_sub((1-decay)*(moving_mean - batch_mean))
-#            update_var = moving_var.assign_sub((1-decay)*(moving_var - batch_var))
-#            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_mean)
-#            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_var)
-#        else:
-#            x, batch_mean, batch_var = tf.nn.fused_batch_norm(x, gamma, beta,
-#                    mean=moving_mean, variance=moving_var, is_training=False,
-#                    data_format='NHWC')
-#        return x
-
-def cross_entropy(pred, label):
-    ce = tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label)
-    return ce
-    #return -tf.reduce_mean(tf.reduce_sum(label*tf.log(pred+1e-10), axis=1))
+def cross_entropy(pred, label): 
+    return -tf.reduce_mean(tf.reduce_sum(label*tf.log(pred+1e-10), axis=1))
 
 def cross_entropy_with_metabatch(pred, label):
     # shape of pred, label: (metabatch, batch, nway)

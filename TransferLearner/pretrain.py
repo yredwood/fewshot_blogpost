@@ -20,7 +20,6 @@ def parse_args():
     parser.add_argument('--pr', dest='pretrained', default=False, type=bool)
     parser.add_argument('--data', dest='dataset_dir', default='../data_npy')
     parser.add_argument('--model', dest='model_dir', default='../models')
-    parser.add_argument('--dset', dest='dataset_name', default='miniImagenet')
     parser.add_argument('--name', dest='model_name', default='transfer_pretrain')
     parser.add_argument('--lr', dest='lr', default=1e-3, type=float)
     parser.add_argument('--train', dest='train', default=1, type=int)
@@ -34,7 +33,7 @@ def validate(net, dataset):
     accs, losss = [], [] 
     for i in range(args.val_iter):
         x, y = dataset.get_batch(args.batch_size, 'val')
-        fd = {net.inputs['x']: x, net.inputs['y']: y, lr_ph: lr}
+        fd = {net.inputs['x']: x, net.inputs['y']: y}
         runs = [net.outputs['acc'], net.outputs['loss']]
         acc, loss = sess.run(runs, fd)
         accs.append(acc)
@@ -46,6 +45,11 @@ def validate(net, dataset):
             np.std(accs)*100.*1.96/np.sqrt(args.val_iter),
             np.mean(losss)))
 
+#def lr_scheduler(epoch, lr_list):
+#    # x 0.5 each 20 epochs
+    
+    
+    
 
 if __name__=='__main__': 
     args = parse_args() 
@@ -57,11 +61,15 @@ if __name__=='__main__':
 
     config = load_config(args.config)
     dataset = BatchGenerator(args.dataset_dir, 'train', config)
+    test_dataset = BatchGenerator(args.dataset_dir, 'test', config)
     lr_ph = tf.placeholder(tf.float32) 
-    trainnet = TransferNet(args.model_name, dataset.n_classes, isTr=True)
-    testnet = TransferNet(args.model_name, dataset.n_classes, isTr=False, reuse=True)
+    args.dataset_name = '+'.join(config['TRAIN_DATASET'])
+    hw = 32 if 'cifar' in args.dataset_name else 84
+    trainnet = TransferNet(args.model_name, dataset.n_classes, isTr=True, hw=hw)
+    testnet = TransferNet(args.model_name, dataset.n_classes, isTr=False, reuse=True, hw=hw)
 
     opt = tf.train.AdamOptimizer(lr_ph) 
+    #opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
         train_op = opt.minimize(trainnet.outputs['loss']) 
@@ -103,7 +111,7 @@ if __name__=='__main__':
                     '| in {:.2f} secs '\
                     .format(avger[0], 
                         avger[1], lr, avger[3]*show_step))
-                validate(testnet, dataset)
+                validate(testnet, test_dataset)
                 avger[:] = 0
 
             if i % save_step == 0 and i != 0: 
@@ -113,4 +121,4 @@ if __name__=='__main__':
                 print ('saved at : {}'.format(out_loc))
                 saver.save(sess, out_loc)
     else: # if test only
-        validate(testnet, dataset)
+        validate(testnet, test_dataset)

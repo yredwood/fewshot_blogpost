@@ -77,3 +77,48 @@ if args.dataset_name == 'tieredImagenet':
         outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
         np.save(outfile_name, np.array(out_data))
         print ('saved in {}'.format(outfile_name))
+
+if args.dataset_name=='cl_cifar10':
+    # dataset for validating structure performance
+    # -> so this is not for meta-learning, it's for classical learning
+
+    for dsettype in ['train', 'test']:
+        if dsettype=='train':
+            data = []
+            label = []
+            for i in range(5):
+                data_dir = os.path.join(args.data_root, 'data_batch_{}'.format(i+1))
+                f = open(data_dir, 'rb')
+                d = pickle.load(f, encoding='bytes')
+                data.append(np.array(d[b'data']))
+                label.append(np.array(d[b'labels']))
+                f.close()
+
+            data = np.reshape(data, [-1,3,32,32])
+            data = np.transpose(data, [0,2,3,1])
+            label = np.reshape(label, [-1])
+        else:
+            data_dir = os.path.join(args.data_root, 'test_batch')
+            f = open(data_dir, 'rb')
+            d = pickle.load(f, encoding='bytes')
+            data = np.array(d[b'data'])
+            data = np.reshape(data, [-1,3,32,32])
+            data = np.transpose(data, [0,2,3,1])
+            label = np.array(d[b'labels'])
+            f.close()
+                    
+        classwise_data = []
+        for lb in np.unique(label):
+            classwise_data.append(data[label==lb])
+        
+        # we'll not separate the validation set
+        dataset_output_path = os.path.join(args.output_path, dsettype)
+        if not os.path.exists(dataset_output_path):
+            os.makedirs(dataset_output_path)
+        outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
+        np.save(outfile_name, np.array(classwise_data))
+        print ('saved in ', outfile_name)
+        
+
+
+    #

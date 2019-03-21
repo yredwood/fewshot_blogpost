@@ -11,4 +11,10 @@ def load_config(config_type):
             'TEST_DATASET': ['miniImagenet'],
             'VALID_DATASET': ['miniImagenet']
             }
+    elif config_type=='cl_cifar10':
+        config = {
+            'TRAIN_DATASET': ['cl_cifar10'],
+            'TEST_DATASET': ['cl_cifar10'],
+            'VALID_DATASET': ['cl_cifar10']
+            }
     return config

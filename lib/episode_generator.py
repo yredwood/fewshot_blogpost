@@ -2,6 +2,7 @@ import numpy as np
 import os 
 import time 
 import pdb
+from tflearn.data_augmentation import ImageAugmentation
 try: 
     import cPickle as pickle
 except:
@@ -10,7 +11,8 @@ except:
 DATASET_SIZE = {'awa2': int(37322*0.8), 'mnist': 70000, 'cub200_2011': 11788,
         'omniglot': int(32460*0.8), 'caltech101': 9144, 'caltech256': int(30607*0.8),
         'cifar100': int(60000*0.8), 'cifar10': 60000, 'voc2012': 11540,
-        'miniImagenet': int(60000*0.64), 'tieredImagenet': 448695}
+        'miniImagenet': int(60000*0.64), 'tieredImagenet': 448695,
+        'cl_cifar10': 60000}
 
 class EpisodeGenerator(): 
     def __init__(self, data_dir, phase, config):
@@ -79,6 +81,48 @@ class EpisodeGenerator():
 
 class BatchGenerator():
     def __init__(self, data_dir, phase, config=None):
+        if phase.upper() in ['TRAIN', 'VAL', 'TEST']:
+            self.dataset_list = config['{}_DATASET'.format(phase.upper())]
+        else:
+            raise ValueError('select only from train')
+
+        # its not list in classical setting ? 
+        self.data_root = data_dir
+        self.dataset_size = DATASET_SIZE
+        self.phase = phase
+        for i, dname in enumerate(self.dataset_list): 
+            load_dir = os.path.join(data_dir, phase,
+                    dname + '.npy')
+            self.dataset = np.load(load_dir)
+
+        self.n_classes = len(self.dataset)
+        self.hw = 32 if self.dataset_list[0]=='cl_cifar10' else 84
+
+        y = []
+        for i in range(len(self.dataset)):
+            y.append(np.zeros([len(self.dataset[i])])+i)
+        self.x = np.reshape(self.dataset, [-1,self.hw,self.hw,3]) / 255.
+        self.y = np.reshape(y, [-1])
+
+        self.aug = ImageAugmentation()
+        self.aug.add_random_flip_leftright()
+        self.aug.add_random_crop([32,32], padding=4)
+#        self.aug.add_random_rotation(max_angle=25.)
+
+    def get_batch(self, batch_size, onehot=True, aug=False):
+        rndidx = np.random.choice(len(self.y), size=batch_size, replace=False)
+        x = self.x[rndidx]
+        y = self.y[rndidx]
+        if onehot:
+            y1hot = np.zeros([batch_size, self.n_classes])
+            y1hot[np.arange(batch_size), y.astype(int)] = 1
+            y = y1hot
+        if aug:
+            x = self.aug.apply(x)
+        return x, y
+
+class _BatchGenerator():
+    def __init__(self, data_dir, phase, config=None):
         # phase would be only train 
         if phase.upper() in ['TRAIN', 'VAL', 'TEST']:
             self.dataset_list = config['{}_DATASET'.format(phase.upper())]
@@ -141,9 +185,6 @@ class BatchGenerator():
             
         return Dxtr, Dytr, Dxte, Dyte
 
-        
-
-        
         
 
         

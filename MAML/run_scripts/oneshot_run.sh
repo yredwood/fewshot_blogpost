@@ -19,9 +19,9 @@ STG=0     # stop gradient
 InIt=5    # inner loop iteration
 
 params=K${K}_MtLr${MtLr}_STG${STG}_InIt${InIt}_InLr${InLr}
-# if you want test, uncomment resume and the last line
 resume=../models/mamlnet/${params}_30000
 
+# if you want test, uncomment resume and the last line
 CUDA_VISIBLE_DEVICES=${gpu} python main.py \
     --ks $K \
     --stop_grad ${STG} \
@@ -29,4 +29,4 @@ CUDA_VISIBLE_DEVICES=${gpu} python main.py \
     --in_lr ${InLr} \
     --ini  ${InIt} \
     --parm ${params} \
-    --train 0 --resume ${resume} --vali 600 --qs 15 --tk 150 \
+    #--train 0 --resume ${resume} --vali 600 --qs 15 --tk 150 \

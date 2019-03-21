@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument('--train', dest='train', default=1, type=int)
     parser.add_argument('--resume', dest='resume', default=None)
     parser.add_argument('--config', dest='config', default='miniimg')
-    parser.add_argument('--tk', dest='test_kshot', default=10, type=int)
+    parser.add_argument('--tk', dest='test_kshot', default=0, type=int)
     parser.add_argument('--stop_grad', dest='stop_grad', default=0, type=int)
     parser.add_argument('--ini', dest='inner_loop_iter', 
             default=5, type=int)

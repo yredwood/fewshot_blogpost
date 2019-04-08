@@ -8,13 +8,13 @@ import time
 import pdb
 
 from lib.episode_generator import EpisodeGenerator
-from lib.networks import ProtoNet 
-from lib.utils import lr_scheduler
+from net import AdapterNet
+from lib.utils import lr_scheduler, l2_loss
 from config.loader import load_config
 
 def parse_args():
     parser = argparse.ArgumentParser(description='protonet')
-    parser.add_argument('--init', dest='initial_step', default=0, type=int)
+    parser.add_argument('--init', dest='initial_step', default=0, type=int) 
     parser.add_argument('--maxe', dest='max_epoch', default=100, type=int)
     parser.add_argument('--qs', dest='qsize', default=15, type=int)
     parser.add_argument('--nw', dest='nway', default=5, type=int)
@@ -34,7 +34,7 @@ def parse_args():
     parser.add_argument('--tk', dest='test_kshot', default=0, type=int)
     parser.add_argument('--arch', dest='arch', default='simple')
     parser.add_argument('--mbsize', dest='mbsize', default=4, type=int)
-    parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
+    parser.add_argument('--epl', dest='epoch_list', default=[50,80])
     parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
     parser.add_argument('--momentum', dest='momentum', default=0.9, type=float)
     parser.add_argument('--wd_rate', dest='wd_rate', default=1e-4, type=float)
@@ -75,12 +75,6 @@ if __name__=='__main__':
     args = parse_args() 
     print ('='*50) 
     print ('args::') 
-    if args.arch=='resnet':
-        args.epoch_list = '0.5,0.8'
-        args.lr = 1e-1
-    elif args.arch=='simple' or args.arch=='vggnet':
-        args.lr = 1e-3
-        args.epoch_list = '0.7'
     for arg in vars(args):
         print ('%15s: %s'%(arg, getattr(args, arg)))
     print ('='*50) 
@@ -91,32 +85,37 @@ if __name__=='__main__':
     test_kshot = args.kshot if args.test_kshot==0 else args.test_kshot
 
     lr_ph = tf.placeholder(tf.float32) 
-    protonet = ProtoNet(args.model_name, nway, test_kshot, qsize, 
-            isTr=True, arch=args.arch, config=args.config, mbsize=args.mbsize)
+    protonet = AdapterNet(args.model_name, n_classes=None,
+            isTr=True, reuse=False, 
+            config=args.config, depth=20,
+            n_adapt=2, use_adapt=1,
+            fixed_univ=True, metalearn=True,
+            mbsize=args.mbsize, nway=nway,
+            kshot=kshot, qsize=qsize)
 
+    w2loss = l2_loss()
     loss = protonet.outputs['loss'] #+ args.wd_rate*w2loss
     acc = protonet.outputs['acc']
     
     # only evaluates 5way - kshot
-    test_net = ProtoNet(args.model_name, args.nway, test_kshot, qsize, 
-            isTr=False, reuse=True, arch=args.arch, config=args.config, 
-            mbsize=1)
+    test_net = AdapterNet(args.model_name, n_classes=None,
+            isTr=False, reuse=True, 
+            config=args.config, depth=20,
+            n_adapt=2, use_adapt=1,
+            fixed_univ=True, metalearn=True,
+            mbsize=1, nway=nway, kshot=kshot,
+            qsize=qsize)
 
 #    vs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
 #    for i,v in enumerate(vs):
 #        print (i,v)
-    
-    if args.arch=='simple' or args.arch=='vggnet':
-        print ('Adam opt used')
-        opt = tf.train.AdamOptimizer(lr_ph)
-    else:
-        print ('momentum opt used')
-        opt = tf.train.MomentumOptimizer(lr_ph, args.momentum)
-    decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
+    update_var_list = protonet.var_list
+    print ('momentum opt used')
+    opt = tf.train.MomentumOptimizer(lr_ph, args.momentum)
 
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(loss) 
+        train_op = opt.minimize(loss, var_list=update_var_list) 
     saver = tf.train.Saver()
         
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
@@ -143,7 +142,7 @@ if __name__=='__main__':
             cur_epoch = i * (nway * qsize * args.mbsize) \
                     // train_gen.dataset_size[args.dataset_name]
             lr = lr_scheduler(cur_epoch, args.lr, 
-                    epoch_list=decay_epoch, decay=args.lr_decay)
+                    epoch_list=args.epoch_list, decay=args.lr_decay)
 #            sx, sy, qx, qy = train_gen.get_episode(
 #                    nway, kshot, qsize, aug=False) 
             sx, sy, qx, qy = [], [], [], []

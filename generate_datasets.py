@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument('--data-root', 
             default='/home/mike/DataSet/fewshot.dataset/')
     parser.add_argument('--dataset-name',
-            default='miniImagenet',
+            default='miniImagenet_64',
             help='tieredImagenet or miniImagenet or miniImagenet_cy')
     parser.add_argument('--output-path',
             default='./data_npy')
@@ -46,6 +46,38 @@ if args.dataset_name == 'miniImagenet':
         outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
         np.save(outfile_name, np.array(out_data))
         print ('saved in {}'.format(outfile_name))
+
+if args.dataset_name == 'miniImagenet_64':
+    # this is for the standard learning 
+    # only training dataset will be split 
+    # into train/test
+    file_root = os.path.join(args.data_root, 'miniImagenet')
+    fname = os.path.join(file_root, 'mini-imagenet-cache-{}.pkl'.format('train'))
+    with open(fname, 'rb') as f:
+        data = pickle.load(f)
+
+    out_data = []
+    for key, value in data['class_dict'].items():
+        img = data['image_data'][value]
+        out_data.append(img)
+    out_data = np.array(out_data)
+    # out_data.shape : (64,600,84,84,3)
+    train_data = out_data[:,:500]
+    test_data = out_data[:,500:]
+    
+    dataset_output_path = os.path.join(args.output_path, 'train')
+    if not os.path.exists(dataset_output_path):
+        os.makedirs(dataset_output_path)
+    outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
+    np.save(outfile_name, train_data)
+    print ('saved in {}'.format(outfile_name))
+
+    dataset_output_path = os.path.join(args.output_path, 'test')
+    if not os.path.exists(dataset_output_path):
+        os.makedirs(dataset_output_path)
+    outfile_name = os.path.join(dataset_output_path, args.dataset_name + '.npy')
+    np.save(outfile_name, test_data)
+    print ('saved in {}'.format(outfile_name))
 
 if args.dataset_name == 'tieredImagenet':
     # tieredImagenet pkl file can be downloaded from

@@ -8,8 +8,7 @@ import time
 import pdb
 
 from lib.episode_generator import BatchGenerator
-from lib.utils import lr_scheduler, l2_loss
-from lib.networks import TransferNet
+from net import AdapterNet
 from config.loader import load_config
 
 def parse_args():
@@ -29,9 +28,6 @@ def parse_args():
     parser.add_argument('--config', dest='config', default='miniimg')
     parser.add_argument('--bs', dest='batch_size', default=32, type=int)
     parser.add_argument('--arch', dest='arch', default='simple', type=str)
-    parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
-    parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
-    parser.add_argument('--wd', dest='weight_decay', default=0.0001, type=float)
     args = parser.parse_args()
     return args
 
@@ -51,19 +47,20 @@ def validate(net, dataset):
             np.std(accs)*100.*1.96/np.sqrt(args.val_iter),
             np.mean(losss)))
 
+def lr_scheduler(cepoch, epl=[50,80], decay=0.1):
+    lr_list = [args.lr*decay**(i) for i in range(len(epl)+1)]
+    # [lr, lr*decay, lr*decay**2]
+    lridx = np.sum(np.array(epl) <= cepoch)
+    return lr_list[lridx]
+    
 if __name__=='__main__': 
     args = parse_args() 
-    if args.arch=='resnet':
-        args.lr = 1e-1
-        args.epoch_list = '0.5,0.8'
-    elif args.arch=='simple' or args.arch=='vggnet':
-        args.lr = 1e-3
-        args.epoch_list = '0.7'
-
     print ('='*50) 
     print ('args::') 
     for arg in vars(args):
         print ('%15s: %s'%(arg, getattr(args, arg)))
+    use_adapt = 0
+    fixed_univ = False
     print ('='*50) 
 
     config = load_config(args.config)
@@ -72,21 +69,18 @@ if __name__=='__main__':
     lr_ph = tf.placeholder(tf.float32) 
     args.dataset_name = '+'.join(config['TRAIN_DATASET'])
     hw = 32 if 'cifar' in args.dataset_name else 84
-    trainnet = TransferNet(args.model_name, dataset.n_classes, 
-            isTr=True, config=args.config, architecture=args.arch)
-    testnet = TransferNet(args.model_name, dataset.n_classes, 
-            isTr=False, reuse=True, config=args.config, architecture=args.arch)
-        
-    if args.arch=='simple' or args.arch=='vggnet': 
-        opt = tf.train.AdamOptimizer(lr_ph)
-    elif args.arch=='resnet' or args.arch=='resadapt':
-        opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
-    decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
-        
-    wd_loss = l2_loss() * args.weight_decay
+    trainnet = AdapterNet(args.model_name, dataset.n_classes, 
+            isTr=True, config=args.config, depth=20, n_adapt=2, 
+            use_adapt=use_adapt, fixed_univ=fixed_univ)
+    testnet = AdapterNet(args.model_name, dataset.n_classes, reuse=True,
+            isTr=False, config=args.config, depth=20, n_adapt=2, 
+            use_adapt=use_adapt)
+    opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
+
+    update_var_list = trainnet.var_list
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(trainnet.outputs['loss'] + wd_loss) 
+        train_op = opt.minimize(trainnet.outputs['loss'], var_list=update_var_list) 
     saver = tf.train.Saver()
     
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
@@ -107,13 +101,16 @@ if __name__=='__main__':
         for i in range(1, max_iter+1): 
             stt = time.time()
             cur_epoch = i * args.batch_size // dataset.dataset_size[args.dataset_name]
-            lr = lr_scheduler(cur_epoch, args.lr,
-                    epoch_list=decay_epoch, decay=args.lr_decay)
+            #lr = args.lr if i < 0.7 * max_iter else args.lr*.1
+            lr = lr_scheduler(cur_epoch)
 
-            x, y = dataset.get_batch(args.batch_size, 'train', aug=True)
+            x, y = dataset.get_batch(args.batch_size, 'train', aug=False)
             fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr}
             runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], train_op]
             p1, p2, _ = sess.run(runs, fd)
+            #gvs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+            #pdb.set_trace()
+
 
             avger += [p1, p2, 0, time.time() - stt] 
 

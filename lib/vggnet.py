@@ -1,55 +1,85 @@
-import tensorflow as tf 
-from lib.layers import Network
+import tensorflow as tf
+import pdb
 
-class VGGNet_CIFAR(Network):
-    def __init__(self, name):
-        self.name = name
+from lib.reslayers import Conv, Dense, BatchNorm, dropout, relu
+from lib.reslayers import pool, flatten, global_avg_pool
 
-    def net(self, in_x, reuse=False, isTr=True):
-        def conv_block(x, name, filt, reuse, isTr):
-            x = self.conv(x, filt, name=name+'/conv', reuse=reuse)
-            x = tf.nn.relu(x)
-            x = self.batch_norm(x, isTr, name=name+'/bn', reuse=reuse)
-            return x
+class VGGNet(object):
+    def __init__(
+            self, 
+            name='vgg', 
+            in_channels=3, gpu_idx=0, 
+            reuse=None, config='cifar'):
         
-        kp = [0.3,0.4,0.5] if isTr else [1.,1.,1.]
+        if config=='cl_cifar10':
+            self.pool_stride = 2
+            self.is_avg_pool = False
+        else:
+            self.pool_stride = 3
+            self.is_avg_pool = False
 
-        x = conv_block(in_x, 'block01', 64, reuse, isTr)
-        x = tf.nn.dropout(x, kp[0])
-        x = conv_block(x, 'block02', 64, reuse, isTr)
-        x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+        def pool(x):
+            out = tf.layers.max_pooling2d(x,
+                    self.pool_stride, 
+                    self.pool_stride,
+                    data_format='channels_first')
 
-        x = conv_block(x, 'block03', 128, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block04', 128, reuse, isTr)
-        x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+        self.name = name
+        self.n_units = [
+                64, 64, 128, 128, 256, 256, 256,
+                512, 512, 512, 512, 512, 512#, 512*4, 512*4
+        ]
+        self.conv_params = [] 
+        self.bn_params = []
+        self.dense_params = []
+        def _create_block(l, n_in, n_out):
+            self.conv_params.append(
+                    Conv(n_in, n_out, 3, 
+                        name='conv'+str(l), 
+                        padding='SAME'))
+            self.bn_params.append(
+                    BatchNorm(n_out, 
+                        name='bn'+str(l), 
+                        gpu_idx=gpu_idx))
 
-        x = conv_block(x, 'block05', 256, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block06', 256, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block07', 256, reuse, isTr)
-        x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+        with tf.variable_scope(name, reuse=reuse):
+            n_units = self.n_units
+            _create_block(1, in_channels, n_units[0])
+            for i in range(1, 13):
+                _create_block(i+1, n_units[i-1], n_units[i])
 
-        x = conv_block(x, 'block08', 512, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block09', 512, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block10', 512, reuse, isTr)
-        x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+#            self.dense_params.append(
+#                    Dense(n_units[13], n_units[14], 
+#                        name='dense14'))
+#            self.bn_params.append(
+#                    BatchNorm(n_units[14], name='bn14', 
+#                        gpu_idx=gpu_idx))
 
-        x = conv_block(x, 'block11', 512, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block12', 512, reuse, isTr)
-        x = tf.nn.dropout(x, kp[1])
-        x = conv_block(x, 'block13', 512, reuse, isTr)
-        x = tf.nn.max_pool(x, [1,1,2,2], [1,1,2,2], 'VALID', 'NCHW')
+    def net(self, x, train):
+        def _apply_block(x, train, l, p=None):
+            conv = self.conv_params[l]
+            bn = self.bn_params[l]
+            x = relu(bn(conv(x), train))
+            x = pool(x) if p is None \
+                    else dropout(x, p, training=train)
+            return x
 
-        x = tf.nn.dropout(x, kp[2])
-        x = tf.layers.flatten(x)
-        x = self.dense(x, 512, name='fc14', reuse=reuse)
+        p_list = [
+            0.3, None,
+            0.4, None,
+            0.4, 0.4, None,
+            0.4, 0.4, None,
+            0.4, 0.4, None
+        ]
+        for l, p in enumerate(p_list):
+            x = _apply_block(x, train, l, p=p)
 
-        x = tf.nn.dropout(x, kp[2])
-        # last fully connected layer and softmax layer will be applied in 
-        # each task specific networks
+#        bn14 = self.bn_params[-1]
+#        dense14 = self.dense_params[0]
+
+        x = flatten(global_avg_pool(x)) \
+                if self.is_avg_pool else flatten(x)
+        #x = dropout(x, 0.5, training=train)
+        #x = relu(bn14(dense14(x), train))
+        #x = dropout(x, 0.5, training=train)
         return x

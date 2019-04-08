@@ -2,32 +2,48 @@ import tensorflow as tf
 import os
 import pdb
 from lib.layers import Network, ce_logit, cross_entropy, tf_acc
-from lib.vggnet import VGGNet_CIFAR
+from lib.vggnet import VGGNet
+from lib.resnet import ResNet
+from lib.resadapters import ResNetAdapter
+
 
 class TransferNet(Network):
     def __init__(self, name, n_classes, isTr, reuse=False, 
-            input_dict=None, hw=None):
+            input_dict=None, config='cl_cifar10', architecture='simple'):
         self.name = name
         self.n_classes = n_classes
-        self.hw = hw if hw is not None else 84
+        self.hw = 32 if config=='cl_cifar10' else 84
         if input_dict is None:
-            self.inputs = {\
+            self.inputs = {
                     'x': tf.placeholder(tf.float32, [None,self.hw,self.hw,3]),
                     'y': tf.placeholder(tf.float32, [None,n_classes])
-                    }
+            }
         else:
             self.inputs = input_dict
+        self.architecture = architecture
+        self.config = config
 
         self.outputs = {}
         with tf.variable_scope(name):
-            self._build_network(isTr, reuse)
+            self._build_network(isTr, reuse, architecture)
     
-    def _build_network(self, isTr, reuse):
-        vggnet = VGGNet_CIFAR('vggnet')
-        
+    def _build_network(self, isTr, reuse, architecture):
         x = tf.transpose(self.inputs['x'], [0,3,1,2])
-#        f = self.simple_conv(x, reuse=reuse, isTr=isTr)
-        f = vggnet.net(x, reuse=reuse, isTr=isTr)
+        if architecture == 'simple':
+            f = self.simple_conv(x, reuse=reuse, isTr=isTr)
+        elif architecture == 'vggnet':
+            vgg = VGGNet(architecture, reuse=reuse, config=self.config)
+            f = vgg.net(x, isTr)
+        elif architecture == 'resnet':
+            resnet = ResNet('resnet', 20, reuse=reuse, config=self.config)
+            f = resnet(x, isTr)
+            f = tf.layers.flatten(f)
+#        elif architecture == 'resadapt':
+#            resnet = ResNetAdapter('resadapt', 20, reuse=reuse, 
+#                    config=self.config, n_adapt=2)
+#            f = resnet(x, isTr, 0)
+#            f = tf.layers.flatten(f)
+
         pred = self.dense(f, self.n_classes, name='trtask_dense', reuse=reuse)
         loss = cross_entropy(tf.nn.softmax(pred), self.inputs['y'])
         acc = tf_acc(pred, self.inputs['y'])
@@ -38,53 +54,114 @@ class TransferNet(Network):
         self.outputs['acc'] = acc
 
 class ProtoNet(Network):
-    def __init__(self, name, nway, kshot, qsize, isTr, reuse=False):
+    def __init__(self, name, nway, kshot, qsize, isTr, 
+            reuse=False, mbsize=1,
+            arch='simple', config=None):
         self.name = name
         self.nway = nway
         self.kshot = kshot
         self.qsize = qsize
-        self.hdim = 1600
+        self.mbsize = mbsize
+#        if arch=='simple':
+#            self.hdim = 1600
+#        elif arch=='resnet':
+#            self.hdim = 512
+#        elif arch=='vgg':
+#            self.hdim = 2048
+        
+        self.arch = arch
+        self.config = config # dataset type to use
 
         self.inputs = {\
-                'sx': tf.placeholder(tf.float32, [None,84,84,3]),
-                'qx': tf.placeholder(tf.float32, [None,84,84,3]),
-                'qy': tf.placeholder(tf.float32, [None,None]),
+                'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3]),
+                'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3]),
+                'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway]),
                 'lr': tf.placeholder(tf.float32),
                 'tr': tf.placeholder(tf.bool)}
         self.outputs = {}
 
         with tf.variable_scope(name):
-            self._build_network(isTr, reuse=reuse)
+            self._build_network(isTr, reuse=reuse, arch=arch)
 
-    def _build_network(self, isTr, reuse):
+    def _build_network(self, isTr, reuse, arch='simple'):
         ip = self.inputs
-        sq_inputs = tf.concat([ip['sx'], ip['qx']], axis=0)
-        sq_outputs = self.base_cnn(sq_inputs, isTr=isTr, reuse=reuse) 
-#        if True:
-#            sq_outputs = sq_outputs / (tf.norm(sq_outputs, axis=1, 
-#                keepdims=True) + 1e-8) * 1e+1
-        support_h = sq_outputs[:self.nway*self.kshot]
-        query_h = sq_outputs[self.nway*self.kshot:]
+            
+        all_mb_data = tf.concat([
+                tf.reshape(ip['sx'], [-1,84,84,3]),
+                tf.reshape(ip['qx'], [-1,84,84,3])],
+                axis=0)
+        
+        all_feats = self.base_cnn(all_mb_data,
+                isTr=isTr, reuse=reuse, arch=arch)
 
-        proto_vec = tf.reshape(support_h, [self.nway, -1, self.hdim]) 
-        proto_vec = tf.reduce_mean(proto_vec, axis=1)
+        xs = tf.reshape(
+                all_feats[:self.mbsize*self.nway*self.kshot],
+                [self.mbsize,self.nway*self.kshot,self.hdim])
+        xq = tf.reshape(
+                all_feats[self.mbsize*self.nway*self.kshot:],
+                [self.mbsize,self.nway*self.qsize,self.hdim])
 
-        _p = tf.expand_dims(proto_vec, axis=0)
-        _q = tf.expand_dims(query_h, axis=1)
-        embedding = (_p - _q)**2 
-        dist = tf.reduce_mean(embedding, axis=2)
-#        dist = tf.reduce_sum(proto_vec * query_vec, axis=1)
-        prediction = tf.nn.softmax(-dist)
-    
-        self.outputs['embedding'] = embedding
-        self.outputs['pred'] = prediction
-        self.outputs['loss'] = cross_entropy(prediction, ip['qy']) 
-        self.outputs['acc'] = tf_acc(prediction, ip['qy'])
+        def singlebatch_graph(inputs):
+            xs, xq, yq = inputs
+            
+            proto_vec = tf.reshape(xs, [self.nway,-1,self.hdim])
+            proto_vec = tf.reduce_mean(proto_vec, axis=1)
+            
+            sim = self.uclidean_sim(proto_vec, xq)
+            pred = tf.nn.softmax(sim)
+            loss = tf.losses.softmax_cross_entropy(
+                    onehot_labels=yq, logits=sim)
+            acc = tf_acc(pred, yq)
+            return sim, pred, loss, acc
 
-    def base_cnn(self, in_x, isTr, reuse=False):
+        elems = (xs, xq, ip['qy'])
+        out_dtype = (tf.float32, tf.float32, tf.float32, tf.float32)
+        meta_sim, meta_pred, meta_loss, meta_acc = \
+                tf.map_fn(singlebatch_graph, elems, dtype=out_dtype,
+                        parallel_iterations=self.mbsize)
+
+        self.outputs['embedding'] = 0
+        self.outputs['pred'] = meta_sim
+        
+        self.outputs['loss'] = tf.reduce_mean(meta_loss)
+        self.outputs['acc'] = tf.reduce_mean(meta_acc)
+
+        self.probe = [meta_acc, meta_pred]
+#        self.outputs['loss'] = tf.losses.softmax_cross_entropy(
+#                onehot_labels=ip['qy'], logits=sim)
+#        self.outputs['acc'] = tf_acc(prediction, ip['qy'])
+
+    def base_cnn(self, in_x, isTr, reuse=False, arch='simple'):
         in_x = tf.transpose(in_x, [0,3,1,2])
-        return self.simple_conv(in_x, reuse=reuse, isTr=isTr)
+        if arch == 'simple':
+            f = self.simple_conv(in_x, reuse=reuse, isTr=isTr)
+        elif arch == 'resnet':
+            resnet = ResNet('resnet', 20,
+                    reuse=reuse, config=self.config)
+            f = resnet(in_x, isTr)
+            f = tf.layers.flatten(f)
+        elif arch == 'vggnet':
+            vgg = VGGNet('vggnet', reuse=reuse, 
+                    config=self.config)
+            f = vgg.net(in_x, isTr)
+        self.hdim = f.get_shape().as_list()[-1]
+        return f
 
+    def uclidean_sim(self, xs, xq):
+        xs = tf.expand_dims(xs, 0)
+        xq = tf.expand_dims(xq, 1)
+        emb = (xs-xq)**2
+        dist = tf.reduce_mean(emb, axis=2)
+        return -dist
+
+    def cosine_sim(self, xs, xq):
+        xs = tf.nn.l2_normalize(xs, 1)
+        xq = tf.nn.l2_normalize(xq, 1)
+        
+        xs = tf.expand_dims(xs, 0)
+        xq = tf.expand_dims(xq, 1)
+        return tf.reduce_sum(tf.multiply(xs, xq), axis=2)
+        
 
 class MAMLNet(Network):
     def __init__(self, name, nway, kshot, qsize, mbsize, norm=False, reuse=False, 
@@ -101,17 +178,17 @@ class MAMLNet(Network):
         
         if input_dict is None:
             self.inputs = {\
-                    'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3], 
-                        name='ph_sx'),
-                    'sy': tf.placeholder(tf.float32, [mbsize,nway*kshot,nway],
-                        name='ph_sy'),
-                    'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3],
-                        name='ph_qx'),
-                    'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway],
-                        name='ph_qy'),
-                    'tr': tf.placeholder(tf.bool, name='ph_isTr'),
-                    'lr_alpha': tf.placeholder(tf.float32, [], name='ph_alpha'),
-                    'lr_beta': tf.placeholder(tf.float32, [], name='ph_beta')}
+                'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3], 
+                    name='ph_sx'),
+                'sy': tf.placeholder(tf.float32, [mbsize,nway*kshot,nway],
+                    name='ph_sy'),
+                'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3],
+                    name='ph_qx'),
+                'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway],
+                    name='ph_qy'),
+                'tr': tf.placeholder(tf.bool, name='ph_isTr'),
+                'lr_alpha': tf.placeholder(tf.float32, [], name='ph_alpha'),
+                'lr_beta': tf.placeholder(tf.float32, [], name='ph_beta')}
         else:
             self.inputs = input_dict
 

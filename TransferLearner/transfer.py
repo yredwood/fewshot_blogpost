@@ -103,7 +103,6 @@ if __name__=='__main__':
         saver.restore(sess, loc)
         print ('restored from {}'.format(loc))
     
-    
     # save the initial value
     var_val = sess.run(var_list)
     init_fd = {}

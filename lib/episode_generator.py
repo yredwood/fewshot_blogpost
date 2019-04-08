@@ -12,7 +12,8 @@ DATASET_SIZE = {'awa2': int(37322*0.8), 'mnist': 70000, 'cub200_2011': 11788,
         'omniglot': int(32460*0.8), 'caltech101': 9144, 'caltech256': int(30607*0.8),
         'cifar100': int(60000*0.8), 'cifar10': 60000, 'voc2012': 11540,
         'miniImagenet': int(60000*0.64), 'tieredImagenet': 448695,
-        'cl_cifar10': 60000}
+        'miniImagenet_64': int(60000*0.64),
+        'cl_cifar10': 60000} # used to calculate epoch or see stats 
 
 class EpisodeGenerator(): 
     def __init__(self, data_dir, phase, config):
@@ -31,12 +32,18 @@ class EpisodeGenerator():
             load_dir = os.path.join(data_dir, phase,
                     dname + '.npy')
             self.dataset[dname] = np.load(load_dir)
+
+        self.hw = 32 if self.dataset_list[0]=='cl_cifar10' else 84
+        self.aug = ImageAugmentation()
+        self.aug.add_random_flip_leftright()
+        self.aug.add_random_crop([self.hw,self.hw], padding=self.hw//8)
         
     def get_episode(self, nway, kshot, qsize, 
             dataset_name=None, 
             onehot=True, 
             printname=False, 
-            normalize=True):
+            normalize=True,
+            aug=False):
 
         if (dataset_name is None) or (dataset_name=='multiple'):
             dataset_name = self.dataset_list[np.random.randint(len(self.dataset_list))] 
@@ -75,6 +82,10 @@ class EpisodeGenerator():
             q_1hot[np.arange(nway*qsize), query_set_label] = 1
             support_set_label = s_1hot
             query_set_label = q_1hot
+
+        if aug:
+            support_set_data = self.aug.apply(support_set_data)
+            query_set_data = self.aug.apply(query_set_data)
         
         return support_set_data, support_set_label, query_set_data, query_set_label
 
@@ -106,7 +117,7 @@ class BatchGenerator():
 
         self.aug = ImageAugmentation()
         self.aug.add_random_flip_leftright()
-        self.aug.add_random_crop([32,32], padding=4)
+        self.aug.add_random_crop([self.hw,self.hw], padding=4)
 #        self.aug.add_random_rotation(max_angle=25.)
 
     def get_batch(self, batch_size, onehot=True, aug=False):
@@ -121,7 +132,7 @@ class BatchGenerator():
             x = self.aug.apply(x)
         return x, y
 
-class _BatchGenerator():
+class _BatchGenerator(): # deprecated
     def __init__(self, data_dir, phase, config=None):
         # phase would be only train 
         if phase.upper() in ['TRAIN', 'VAL', 'TEST']:
@@ -187,8 +198,6 @@ class _BatchGenerator():
 
         
 
-        
-        
 if __name__ == '__main__': 
 #    epgen = EpisodeGenerator('../../datasets', 'test')
 #    st = time.time()

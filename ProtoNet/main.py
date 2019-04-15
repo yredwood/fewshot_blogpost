@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
     parser.add_argument('--momentum', dest='momentum', default=0.9, type=float)
     parser.add_argument('--wd_rate', dest='wd_rate', default=1e-4, type=float)
+    parser.add_argument('--aug', dest='aug', default=0, type=int)
     args = parser.parse_args()
     return args
 
@@ -149,7 +150,7 @@ if __name__=='__main__':
             sx, sy, qx, qy = [], [], [], []
             for _ in range(args.mbsize):
                 _sx, _sy, _qx, _qy = train_gen.get_episode(
-                        nway, kshot, qsize)
+                        nway, kshot, qsize, aug=args.aug)
                 sx.append(_sx)
                 sy.append(_sy)
                 qx.append(_qx)

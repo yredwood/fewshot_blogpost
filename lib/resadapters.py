@@ -82,7 +82,7 @@ class ResNetAdapter(object):
 
             if n_in != n_out: 
                 univ_params.append(
-                        Conv(n_in, n_out, 3, strides=stride, 
+                        Conv(n_in, n_out, 1, strides=stride, 
                             name=name+'/proj_conv', padding='SAME'))
                 univ_params.append(
                         BatchNorm(n_out, name=name+'proj_bn', 
@@ -135,7 +135,6 @@ class ResNetAdapter(object):
 #            self.post_params.append(
 #                    Dense(64, n_classes, name='dense_logit'))
                 
-
             self.univ_vars = []
             self.dom_vars = [[] for _ in range(self.n_adapt)]
             vs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)

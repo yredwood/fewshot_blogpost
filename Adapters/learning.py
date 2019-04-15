@@ -8,6 +8,7 @@ import time
 import pdb
 
 from lib.episode_generator import BatchGenerator
+from lib.utils import lr_scheduler, l2_loss
 from net import AdapterNet
 from config.loader import load_config
 
@@ -28,6 +29,11 @@ def parse_args():
     parser.add_argument('--config', dest='config', default='miniimg')
     parser.add_argument('--bs', dest='batch_size', default=32, type=int)
     parser.add_argument('--arch', dest='arch', default='simple', type=str)
+    parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
+    parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
+    parser.add_argument('--aug', dest='aug', default=0, type=int)
+    parser.add_argument('--wd', dest='weight_decay', default=0.0001, type=float)
+    parser.add_argument('--na', dest='n_adapt', default=2, type=int)
     args = parser.parse_args()
     return args
 
@@ -47,14 +53,13 @@ def validate(net, dataset):
             np.std(accs)*100.*1.96/np.sqrt(args.val_iter),
             np.mean(losss)))
 
-def lr_scheduler(cepoch, epl=[50,80], decay=0.1):
-    lr_list = [args.lr*decay**(i) for i in range(len(epl)+1)]
-    # [lr, lr*decay, lr*decay**2]
-    lridx = np.sum(np.array(epl) <= cepoch)
-    return lr_list[lridx]
-    
 if __name__=='__main__': 
     args = parse_args() 
+    args.lr = 1e-3
+    args.epoch_list = '0.7'
+    config = load_config(args.config)
+    tr_dataset = config['TRAIN_DATASET']
+
     print ('='*50) 
     print ('args::') 
     for arg in vars(args):
@@ -63,54 +68,68 @@ if __name__=='__main__':
     fixed_univ = False
     print ('='*50) 
 
-    config = load_config(args.config)
     dataset = BatchGenerator(args.dataset_dir, 'train', config)
     test_dataset = BatchGenerator(args.dataset_dir, 'test', config)
     lr_ph = tf.placeholder(tf.float32) 
-    args.dataset_name = '+'.join(config['TRAIN_DATASET'])
-    hw = 32 if 'cifar' in args.dataset_name else 84
-    trainnet = AdapterNet(args.model_name, dataset.n_classes, 
-            isTr=True, config=args.config, depth=20, n_adapt=2, 
+
+    trainnet = AdapterNet(args.model_name, dataset.n_classes,
+            isTr=True, config=config, n_adapt=args.n_adapt, 
             use_adapt=use_adapt, fixed_univ=fixed_univ)
     testnet = AdapterNet(args.model_name, dataset.n_classes, reuse=True,
-            isTr=False, config=args.config, depth=20, n_adapt=2, 
+            isTr=False, config=config, n_adapt=args.n_adapt, 
             use_adapt=use_adapt)
-    opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
-
+    
+    opt = tf.train.AdamOptimizer(lr_ph)
+    decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
+    
     update_var_list = trainnet.var_list
+    wd_loss = tf.add_n([tf.nn.l2_loss(v) for v in update_var_list]) \
+            * args.weight_decay
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(trainnet.outputs['loss'], var_list=update_var_list) 
+        train_op = opt.minimize(trainnet.outputs['loss'],# + wd_loss, 
+                var_list=update_var_list) 
     saver = tf.train.Saver()
+    
+    # get # of params
+    num_params = 0
+    for i, v in enumerate(update_var_list):
+        shape = v.get_shape()
+        nv = 1
+        for dim in shape:
+            nv *= dim.value
+        num_params += nv
+        print (i, v.name.replace(args.model_name,''), v.shape)
+    print ('TOTAL NUM OF PARAMS: {}'.format(num_params))
     
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))
     sess.run(tf.global_variables_initializer())
+
     if args.pretrained:
         loc = os.path.join(args.model_dir,
                 args.model_name, 
-                args.dataset_name + '.ckpt')
+                args.config + '.ckpt')
         saver.restore(sess, loc)
+
     
     if args.train:
-        max_iter = dataset.dataset_size[args.dataset_name] * args.max_epoch \
+        max_iter = config['size'] * args.max_epoch \
                 // (args.batch_size)
         show_step = args.show_epoch * max_iter // args.max_epoch
         save_step = args.save_epoch * max_iter // args.max_epoch
         avger = np.zeros([4])
         for i in range(1, max_iter+1): 
             stt = time.time()
-            cur_epoch = i * args.batch_size // dataset.dataset_size[args.dataset_name]
-            #lr = args.lr if i < 0.7 * max_iter else args.lr*.1
-            lr = lr_scheduler(cur_epoch)
+            cur_epoch = i * args.batch_size \
+                    // config['size']
+            lr = lr_scheduler(cur_epoch, args.lr,
+                    epoch_list=decay_epoch, decay=args.lr_decay)
 
-            x, y = dataset.get_batch(args.batch_size, 'train', aug=False)
+            x, y = dataset.get_batch(args.batch_size, 'train', aug=args.aug)
             fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr}
             runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], train_op]
             p1, p2, _ = sess.run(runs, fd)
-            #gvs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
-            #pdb.set_trace()
-
 
             avger += [p1, p2, 0, time.time() - stt] 
 
@@ -130,7 +149,7 @@ if __name__=='__main__':
             if i % save_step == 0 and i != 0: 
                 out_loc = os.path.join(args.model_dir, # models/
                         args.model_name, # bline/
-                        args.dataset_name + '.ckpt')  # cifar100.ckpt
+                        args.config + '.ckpt')  # cifar100.ckpt
                 print ('saved at : {}'.format(out_loc))
                 saver.save(sess, out_loc)
     else: # if test only

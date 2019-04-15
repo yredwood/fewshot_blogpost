@@ -12,7 +12,7 @@ class TransferNet(Network):
             input_dict=None, config='cl_cifar10', architecture='simple'):
         self.name = name
         self.n_classes = n_classes
-        self.hw = 32 if config=='cl_cifar10' else 84
+        self.hw = config['hw']
         if input_dict is None:
             self.inputs = {
                     'x': tf.placeholder(tf.float32, [None,self.hw,self.hw,3]),

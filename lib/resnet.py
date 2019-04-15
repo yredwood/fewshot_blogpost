@@ -50,7 +50,7 @@ class ResNet(object):
 
             if n_in != n_out: 
                 block_params.append(
-                        Conv(n_in, n_out, 3, strides=stride, 
+                        Conv(n_in, n_out, 1, strides=stride, 
                             name=name+'/proj_conv', padding='SAME'))
                 block_params.append(
                         BatchNorm(n_out, name=name+'proj_bn', 

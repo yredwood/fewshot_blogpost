@@ -30,7 +30,9 @@ class Network(object):
     def deconv(self, x, filters, kernel_size=3, strides=1, padding='SAME', 
             name='deconv', reuse=None):
         with tf.variable_scope(name, reuse=reuse):
-            x = tf.layers.conv2d_transpose(x, filters, kernel_size, strides, data_format='channels_first',
+            x = tf.layers.conv2d_transpose(x,
+                    filters, kernel_size, strides, 
+                    data_format='channels_first',
                     reuse=reuse, padding=padding)
             return x
 
@@ -47,7 +49,8 @@ class Network(object):
                     initializer=tf.ones_initializer())
 
             if training:
-                x, batch_mean, batch_var = tf.nn.fused_batch_norm(x, gamma, beta, data_format='NCHW')
+                x, batch_mean, batch_var = tf.nn.fused_batch_norm(\
+                        x, gamma, beta, data_format='NCHW')
                 update_mean = moving_mean.assign_sub((1-decay)*(moving_mean - batch_mean))
                 update_var = moving_var.assign_sub((1-decay)*(moving_var - batch_var))
                 tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_mean)
@@ -101,3 +104,7 @@ def ckpt_restore_with_prefix(sess, ckpt_dir, prefix):
             with tf.variable_scope(prefix, reuse=True):
                 tfvar = tf.get_variable(var_name)
                 sess.run(tfvar.assign(var))
+
+
+def restore_possible_ones(sess, ckpt_dir):
+    pass

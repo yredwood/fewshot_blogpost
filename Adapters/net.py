@@ -1,6 +1,8 @@
 import tensorflow as tf
+import pdb
 
-from lib.resadapters import ResNetAdapter
+#from lib.resadapters import ResNetAdapter
+from lib.convadapters import ConvNetAdapter as Adapter
 from lib.layers import Network, cross_entropy, tf_acc
 
 class AdapterNet(Network):
@@ -8,7 +10,6 @@ class AdapterNet(Network):
             self, name, n_classes, isTr,
             reuse=False, input_dict=None,
             config='cl_cifar10', 
-            depth=20,
             n_adapt=2, 
             use_adapt=0,
             fixed_univ=False,
@@ -17,7 +18,7 @@ class AdapterNet(Network):
 
         self.name = name
         self.n_classes = n_classes
-        self.hw = 32 if config=='cl_cifar10' else 84
+        self.hw = hw = config['hw']
         self.metalearn = metalearn
         self.mbsize = mbsize
         self.nway = nway
@@ -26,8 +27,8 @@ class AdapterNet(Network):
         if input_dict is None:
             if metalearn:
                 self.inputs = {
-                    'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,84,84,3]),
-                    'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,84,84,3]),
+                    'sx': tf.placeholder(tf.float32, [mbsize,nway*kshot,hw,hw,3]),
+                    'qx': tf.placeholder(tf.float32, [mbsize,nway*qsize,hw,hw,3]),
                     'qy': tf.placeholder(tf.float32, [mbsize,nway*qsize,nway]),
                     'lr': tf.placeholder(tf.float32),
                 }
@@ -40,10 +41,8 @@ class AdapterNet(Network):
             self.inputs = input_dict
         self.outputs = {}
 
-        self.config = config
         self.fixed_univ = fixed_univ
-        self.depth = depth
-        self.n_adapt = 2
+        self.n_adapt = n_adapt
         self.use_adapt = use_adapt 
         assert n_adapt > use_adapt
 
@@ -52,18 +51,22 @@ class AdapterNet(Network):
                 self._build_proto(isTr, reuse)
             else:
                 self._build_network(isTr, reuse)
-
+        self.var_list = self.net.dom_vars[self.use_adapt] \
+                + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+                        scope=name+'/trtask_dense/*')
+        if not fixed_univ:
+            self.var_list += self.net.univ_vars
+        
+#        for i,v in enumerate(self.var_list):
+#            print (i,v.name.replace(name,''))
+#        pdb.set_trace()
+            
     def _build_network(self, isTr, reuse):
         x = tf.transpose(self.inputs['x'], [0,3,1,2])
-        resnet = ResNetAdapter('ra', self.depth, 
-                reuse=reuse, config=self.config, 
-                n_adapt=self.n_adapt)
-        f = resnet(x, isTr, self.use_adapt)
-        f = tf.layers.flatten(f)
-
-        self.var_list = resnet.dom_vars[self.use_adapt] \
-                if self.fixed_univ else None
-
+        self.net = Adapter('Simple',
+                reuse=reuse, n_adapt=self.n_adapt)
+        f = self.net(x, isTr, self.use_adapt)
+    
         pred = self.dense(f, self.n_classes, name='trtask_dense', reuse=reuse)
         loss = cross_entropy(tf.nn.softmax(pred), self.inputs['y'])
         acc = tf_acc(pred, self.inputs['y'])
@@ -74,22 +77,18 @@ class AdapterNet(Network):
         self.outputs['acc'] = acc
 
     def _build_proto(self, isTr, reuse):
-        resnet = ResNetAdapter('ra', self.depth,
-                reuse=reuse, config=self.config,
-                n_adapt=self.n_adapt)
-        self.var_list = resnet.dom_vars[self.use_adapt] \
-                if self.fixed_univ else None
+        self.net = Adapter('Simple', 
+                reuse=reuse, n_adapt=self.n_adapt)
 
         def cnn(in_x, isTr, reuse):
             x = tf.transpose(in_x, [0,3,1,2])
-            f = resnet(x, isTr, self.use_adapt)
-            f = tf.layers.flatten(f)
+            f = self.net(x, isTr, self.use_adapt)
             return f
 
         ip = self.inputs
         mball = tf.concat([
-            tf.reshape(ip['sx'], [-1,84,84,3]),
-            tf.reshape(ip['qx'], [-1,84,84,3])],
+            tf.reshape(ip['sx'], [-1,self.hw,self.hw,3]),
+            tf.reshape(ip['qx'], [-1,self.hw,self.hw,3])],
             axis=0)
 
         all_feats = cnn(mball, isTr=isTr, reuse=reuse)

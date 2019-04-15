@@ -32,6 +32,7 @@ def parse_args():
     parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
     parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
     parser.add_argument('--wd', dest='weight_decay', default=0.0001, type=float)
+    parser.add_argument('--aug', dest='aug', default=0, type=int)
     args = parser.parse_args()
     return args
 
@@ -77,17 +78,30 @@ if __name__=='__main__':
     testnet = TransferNet(args.model_name, dataset.n_classes, 
             isTr=False, reuse=True, config=args.config, architecture=args.arch)
         
-    if args.arch=='simple' or args.arch=='vggnet': 
-        opt = tf.train.AdamOptimizer(lr_ph)
-    elif args.arch=='resnet' or args.arch=='resadapt':
-        opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
+    opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
     decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
         
     wd_loss = l2_loss() * args.weight_decay
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(trainnet.outputs['loss'] + wd_loss) 
+        train_op = opt.minimize(trainnet.outputs['loss']+ wd_loss) 
     saver = tf.train.Saver()
+
+
+    # get # of params
+    num_params = 0
+    for i,v in enumerate(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)):
+        shape = v.get_shape()
+        nv = 1
+        for dim in shape:
+            nv *= dim.value
+        num_params += nv
+        if i ==0: 
+            continue
+        print (i,v.name.replace(args.model_name, ''), v.shape)
+    print ('TOTAL NUM OF PARAMS: {}'.format(num_params))
+
+
     
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))
@@ -110,7 +124,7 @@ if __name__=='__main__':
             lr = lr_scheduler(cur_epoch, args.lr,
                     epoch_list=decay_epoch, decay=args.lr_decay)
 
-            x, y = dataset.get_batch(args.batch_size, 'train', aug=True)
+            x, y = dataset.get_batch(args.batch_size, 'train', aug=args.aug)
             fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr}
             runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], train_op]
             p1, p2, _ = sess.run(runs, fd)

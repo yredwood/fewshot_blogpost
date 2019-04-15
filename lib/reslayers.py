@@ -114,7 +114,7 @@ class Conv(object):
             return [self.W]
 
 class BatchNorm(object):
-    def __init__(self, n_in, momentum=0.99,
+    def __init__(self, n_in, momentum=0.9,
             beta_initializer=tf.zeros_initializer(),
             gamma_initializer=tf.ones_initializer(),
             name='batch_norm', gpu_idx=0, reuse=None):

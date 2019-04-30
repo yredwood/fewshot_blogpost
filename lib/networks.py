@@ -324,7 +324,7 @@ class MAMLNet(Network):
         for s in x.get_shape().as_list()[1:]:
             dim *= s
         x = tf.reshape(x, [-1, dim])
-        x = x / (tf.norm(x, axis=1, keep_dims=True) + 1e-8) * 1e+1
+        #x = x / (tf.norm(x, axis=1, keep_dims=True) + 1e-8) * 1e+1
         out = tf.matmul(x, weights['w5']) + weights['b5']
         if get_emb:
             return out, x

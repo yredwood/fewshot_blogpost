@@ -1,12 +1,42 @@
 import numpy as np 
+import random
+import tensorflow as tf
 import os 
 import time 
 import pdb
-from tflearn.data_augmentation import ImageAugmentation
+
 try: 
     import cPickle as pickle
 except:
     import pickle # python3
+
+def _random_crop(batch, crop_shape, padding=None):
+    oshape = np.shape(batch[0])
+    if padding:
+        oshape = (oshape[0] + 2*padding, oshape[1] + 2*padding)
+    new_batch = []
+    npad = ((padding, padding), (padding, padding), (0, 0))
+    for i in range(len(batch)):
+        new_batch.append(batch[i])
+        if padding:
+            new_batch[i] = np.lib.pad(batch[i], pad_width=npad,
+                                      mode='constant', constant_values=0)
+        nh = random.randint(0, oshape[0] - crop_shape[0])
+        nw = random.randint(0, oshape[1] - crop_shape[1])
+        new_batch[i] = new_batch[i][nh:nh + crop_shape[0],
+                                    nw:nw + crop_shape[1]]
+    return new_batch
+
+def _random_flip_leftright(batch):
+    for i in range(len(batch)):
+        if bool(random.getrandbits(1)):
+            batch[i] = np.fliplr(batch[i])
+    return batch
+
+def augmentation(img, hw, pad):
+    img = _random_crop(img, [hw,hw], pad)
+    img = _random_flip_leftright(img)
+    return img
 
 class EpisodeGenerator(): 
     def __init__(self, data_dir, phase, config):
@@ -26,10 +56,7 @@ class EpisodeGenerator():
             self.dataset[dname] = np.load(load_dir)
         
         self.hw = config['hw']
-        self.aug = ImageAugmentation()
-        self.aug.add_random_flip_leftright()
-        self.aug.add_random_crop([self.hw,self.hw], padding=self.hw//8)
-        
+
     def get_episode(self, nway, kshot, qsize, 
             dataset_name=None, 
             onehot=True, 
@@ -76,8 +103,11 @@ class EpisodeGenerator():
             query_set_label = q_1hot
 
         if aug:
-            support_set_data = self.aug.apply(support_set_data)
-            query_set_data = self.aug.apply(query_set_data)
+            pad = self.hw//8
+            support_set_data = augmentation(support_set_data,
+                    self.hw, pad)
+            query_set_data = augmentation(query_set_data, 
+                    self.hw, pad)
         
         return support_set_data, support_set_label, query_set_data, query_set_label
 
@@ -108,10 +138,6 @@ class BatchGenerator():
         self.x = np.concatenate(self.dataset, axis=0) / 255.
         self.y = np.concatenate(y, axis=0)
 
-        self.aug = ImageAugmentation()
-        self.aug.add_random_flip_leftright()
-        self.aug.add_random_crop([self.hw,self.hw], padding=self.hw//8)
-
     def get_batch(self, batch_size, onehot=True, aug=False):
         rndidx = np.random.choice(len(self.y), size=batch_size, replace=False)
         x = self.x[rndidx]
@@ -121,7 +147,7 @@ class BatchGenerator():
             y1hot[np.arange(batch_size), y.astype(int)] = 1
             y = y1hot
         if aug:
-            x = self.aug.apply(x)
+            x = augmentation(x, self.hw, self.hw//8)
         return x, y
 
         

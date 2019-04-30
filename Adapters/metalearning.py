@@ -74,8 +74,13 @@ def validate(test_net, test_gen):
 
 if __name__=='__main__': 
     args = parse_args() 
-    #args.lr= 1e-3
-    args.epoch_list = '0.7'
+    if args.arch=='res':
+        args.lr= 1e-3
+        args.epoch_list = '0.7'
+    elif args.arch=='adam':
+        args.lr = 1e-1
+        args.lr_decay = 0.2
+        args.epoch_list = '0.3,0.6,0.8'
     config = load_config(args.config)
 
     print ('='*50) 
@@ -92,7 +97,7 @@ if __name__=='__main__':
     lr_ph = tf.placeholder(tf.float32) 
     protonet = AdapterNet(args.model_name, n_classes=None,
             isTr=True, reuse=False, 
-            config=config, 
+            config=config, arch=args.arch,
             n_adapt=2, use_adapt=args.use_adapt,
             fixed_univ=args.fix_univ, metalearn=True,
             mbsize=args.mbsize, nway=nway,
@@ -104,25 +109,25 @@ if __name__=='__main__':
     # only evaluates 5way - kshot
     test_net = AdapterNet(args.model_name, n_classes=None,
             isTr=False, reuse=True, 
-            config=config,
+            config=config, arch=args.arch,
             n_adapt=2, use_adapt=args.use_adapt,
             fixed_univ=args.fix_univ, metalearn=True,
             mbsize=1, nway=nway, kshot=kshot,
             qsize=qsize)
 
-#    vs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
-#    for i,v in enumerate(vs):
-#        print (i,v)
-    update_var_list = protonet.var_list
-    w2loss = tf.add_n([tf.nn.l2_loss(v) for v in update_var_list]) \
-            * args.wd_rate
-    #opt = tf.train.MomentumOptimizer(lr_ph, args.momentum)
-    opt = tf.train.AdamOptimizer(lr_ph)
+
+    #update_var_list = protonet.var_list
+    update_var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+            scope=args.model_name+'/addit/*')
+    print (update_var_list)
+#    w2loss = tf.add_n([tf.nn.l2_loss(v) for v in update_var_list]) \
+#            * args.wd_rate
+    if args.arch=='res':
+        opt = tf.train.AdamOptimizer(lr_ph)
+    elif args.arch=='adam':
+        opt = tf.train.MomentumOptimizer(lr_ph, args.momentum)
 
     decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
-
-#    for i,v in enumerate(update_var_list):
-#        print (i,v)
 
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
@@ -133,18 +138,6 @@ if __name__=='__main__':
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))
     sess.run(tf.global_variables_initializer())
     if args.pretrained!='none':
-#        loc = os.path.join(args.model_dir,
-#                args.model_name, 
-#                args.dataset_name + '_64.learneing.ckpt')
-        if 'cifar' in args.model_name:
-            loc = '../models/AdaptNet_cl_cifar100_aug1/cl_cifar100.ckpt'
-        elif 'tiered' in args.model_name:
-            loc = '../models/AdaptNet_cl_tieredImagenet_aug1/cl_tieredImagenet.ckpt'
-        elif 'omniglot' in args.model_name:
-            loc = '../models/AdaptNet_cl_omniglot_aug1/cl_omniglot.ckpt'
-        else:
-            loc = '../models/AdaptNet_cl_miniImagenet_aug1/cl_miniImagenet.ckpt'
-            loc = '../models/AdaptNet_miniImagenet_aug0_fix0_U0_1205/miniImagenet.ckpt'
         loc = args.pretrained
         saved_list = tf.contrib.framework.list_variables(loc)
         svname_list = []
@@ -157,6 +150,12 @@ if __name__=='__main__':
 
         vs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
         # todo: if there's any var of vs in saved_list, then restore it
+#        for i,v in enumerate(vs):
+#            if i==77:
+#                print (v)
+#            print (i,v.shape)
+#        exit()
+
         assign_op = []
         for v in vs:
             # remove prefix
@@ -164,6 +163,9 @@ if __name__=='__main__':
             if len(nn) <= 2:
                 continue
             vname = '/'.join(nn[2:]).split(':')[0]
+            if 'addit' in v.name:
+                continue
+
             if vname in svname_list:
                 # restore it 
                 orig_svname = saved_list[svname_list.index(vname)][0]
@@ -172,11 +174,10 @@ if __name__=='__main__':
                 #print ('=={} is loaded'.format(vname))
             else:
                 pass
-                #print ('--{} is not in the pretrained model. Not restored'\
-                #        .format(vname))
+#                print ('--{} is not in the pretrained model. Not restored'\
+#                        .format(vname))
         sess.run(assign_op)
         print ('retore success from {}'.format(loc))
-
 
     if not args.train:
         loc = os.path.join(args.model_dir,
@@ -200,8 +201,7 @@ if __name__=='__main__':
                     // config['size']
             lr = lr_scheduler(cur_epoch, args.lr, 
                     epoch_list=decay_epoch, decay=args.lr_decay)
-#            sx, sy, qx, qy = train_gen.get_episode(
-#                    nway, kshot, qsize, aug=False) 
+
             sx, sy, qx, qy = [], [], [], []
             for _ in range(args.mbsize):
                 _sx, _sy, _qx, _qy = train_gen.get_episode(
@@ -218,7 +218,6 @@ if __name__=='__main__':
                 lr_ph: lr}
 
             p1, p2, _ = sess.run([acc, loss, train_op], fd)
-            #p1, p2 = sess.run([acc, loss], fd)
             avger += [p1, p2, 0, time.time() - stt] 
 
             if i % show_step == 0 and i != 0: 

@@ -9,9 +9,9 @@ class VGGNet(object):
             self, 
             name='vgg', 
             in_channels=3, gpu_idx=0, 
-            reuse=None, config='cifar'):
-        
-        if config=='cl_cifar10':
+            reuse=None, stride=2):
+            
+        if stride==2:
             self.pool_stride = 2
             self.is_avg_pool = False
         else:
@@ -55,7 +55,7 @@ class VGGNet(object):
 #                    BatchNorm(n_units[14], name='bn14', 
 #                        gpu_idx=gpu_idx))
 
-    def net(self, x, train):
+    def __call__(self, x, train):
         def _apply_block(x, train, l, p=None):
             conv = self.conv_params[l]
             bn = self.bn_params[l]

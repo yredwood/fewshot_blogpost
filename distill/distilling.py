@@ -9,7 +9,7 @@ import pdb
 
 from lib.episode_generator import BatchGenerator
 from lib.utils import lr_scheduler, l2_loss
-from net import AdapterNet
+from net import ConvNet
 from config.loader import load_config
 
 def parse_args():
@@ -21,19 +21,22 @@ def parse_args():
     parser.add_argument('--pr', dest='pretrained', default=False, type=bool)
     parser.add_argument('--data', dest='dataset_dir', default='../data_npy')
     parser.add_argument('--model', dest='model_dir', default='../models')
-    parser.add_argument('--name', dest='model_name', default='transfer_pretrain')
+    parser.add_argument('--name', dest='model_name', default='distilling')
     parser.add_argument('--lr', dest='lr', default=1e-3, type=float)
     parser.add_argument('--gpuf', dest='gpu_frac', default=0.41, type=float)
     parser.add_argument('--train', dest='train', default=1, type=int)
     parser.add_argument('--vali', dest='val_iter', default=60, type=int)
     parser.add_argument('--config', dest='config', default='miniimg')
     parser.add_argument('--bs', dest='batch_size', default=32, type=int)
-    parser.add_argument('--arch', dest='arch', default='simple', type=str)
     parser.add_argument('--lr_decay', dest='lr_decay', default=0.1, type=float)
     parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
     parser.add_argument('--aug', dest='aug', default=0, type=int)
-    parser.add_argument('--wd', dest='weight_decay', default=0.0005, type=float)
-    parser.add_argument('--na', dest='n_adapt', default=2, type=int)
+    parser.add_argument('--tarch', dest='teacher_arch', default='vgg')
+    parser.add_argument('--sarch', dest='student_arch', default='simple')
+    parser.add_argument('--tname', dest='tmodel_name', default='')
+    parser.add_argument('--sname', dest='smodel_name', default='')
+    parser.add_argument('--tpr', dest='teacher_predtrained', default='')
+
     args = parser.parse_args()
     return args
 
@@ -55,13 +58,10 @@ def validate(net, dataset):
 
 if __name__=='__main__': 
     args = parse_args() 
-    if args.arch=='simple':
-        args.lr = 1e-3
-        args.epoch_list = '0.7'
-    elif args.arch=='res':
-        args.lr = 1e-1
-        args.lr_decay = 0.2
-        args.epoch_list = '0.3,0.6,0.8'
+    if args.student_arch=='simple':
+        args.lr = 1e-2
+        args.lr_decay = 0.1
+        args.epoch_list = '0.5,0.8'
     else: 
         print ('somethings wrong')
         exit()
@@ -72,56 +72,63 @@ if __name__=='__main__':
     print ('args::') 
     for arg in vars(args):
         print ('%15s: %s'%(arg, getattr(args, arg)))
-    use_adapt = 0
-    fixed_univ = False
     print ('='*50) 
 
     dataset = BatchGenerator(args.dataset_dir, 'train', config)
     test_dataset = BatchGenerator(args.dataset_dir, 'test', config)
     lr_ph = tf.placeholder(tf.float32) 
 
-    trainnet = AdapterNet(args.model_name, dataset.n_classes,
-            isTr=True, config=config, n_adapt=args.n_adapt, arch=args.arch,
-            use_adapt=use_adapt, fixed_univ=fixed_univ)
-    testnet = AdapterNet(args.model_name, dataset.n_classes, reuse=True,
-            isTr=False, config=config, n_adapt=args.n_adapt, arch=args.arch,
-            use_adapt=use_adapt)
+    trainnet = ConvNet(args.model_name, dataset.n_classes,
+            isTr=True, config=config, arch=args.student_arch)
+    testnet = ConvNet(args.model_name, dataset.n_classes, reuse=True,
+            isTr=False, config=config, arch=args.student_arch)
+
+
+    teachernet = ConvNet(args.tmodel_name, dataset.n_classes,
+            isTr=False, config=config, arch=args.teacher_arch)
+
+#    logit_diff = tf.reduce_mean(tf.reduce_sum(trainnet.outputs['pred'] \
+#            - teachernet.outputs['pred'], axis=1))
+    logit_diff = 0.05*(trainnet.outputs['pred'] - teachernet.outputs['pred'])**2
+    logit_diff = tf.reduce_mean(tf.reduce_sum(logit_diff, axis=1))
     
-    if args.arch=='simple':
-        opt = tf.train.AdamOptimizer(lr_ph)
-    else:
-        opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
+    opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
     decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
-    
-    update_var_list = trainnet.var_list
-    wd_loss = tf.add_n([tf.nn.l2_loss(v) for v in update_var_list]) \
-            * args.weight_decay
+
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(trainnet.outputs['loss'] + wd_loss, 
-                var_list=update_var_list) 
+        #train_op = opt.minimize(trainnet.outputs['loss']) 
+        train_op = opt.minimize(logit_diff+trainnet.outputs['loss'])
     saver = tf.train.Saver()
-    
-    # get # of params
-    num_params = 0
-    for i, v in enumerate(update_var_list):
-        shape = v.get_shape()
-        nv = 1
-        for dim in shape:
-            nv *= dim.value
-        num_params += nv
-        print (i, v.name.replace(args.model_name,''), v.shape)
-    print ('TOTAL NUM OF PARAMS: {}'.format(num_params))
+
+    vs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    for i,v in enumerate(vs):
+        print (i,v)
     
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))
     sess.run(tf.global_variables_initializer())
+        
+    # restore teacher model
+    loc = os.path.join(args.model_dir,
+            args.tmodel_name,
+            args.config+'.ckpt')
+    print ('teacher model is restored from {}'.format(loc))
+    tvs = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+            scope=args.tmodel_name+'/*')
+    tsaver = tf.train.Saver(tvs)
+    tsaver.restore(sess, loc)
+    
+#    print ('teacher model performace')
+#    validate(teachernet, test_dataset)
+
 
     if args.pretrained:
         loc = os.path.join(args.model_dir,
                 args.model_name, 
                 args.config + '.ckpt')
         saver.restore(sess, loc)
+        print ('student restored from {}'.format(loc))
 
     
     if args.train:
@@ -138,11 +145,13 @@ if __name__=='__main__':
                     epoch_list=decay_epoch, decay=args.lr_decay)
 
             x, y = dataset.get_batch(args.batch_size, 'train', aug=args.aug)
-            fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr}
-            runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], train_op]
-            p1, p2, _ = sess.run(runs, fd)
+            fd = {trainnet.inputs['x']: x, trainnet.inputs['y']: y, lr_ph: lr,
+                    teachernet.inputs['x']: x}
+            runs = [trainnet.outputs['acc'], trainnet.outputs['loss'], 
+                    logit_diff, train_op]
+            p1, p2, p3, _ = sess.run(runs, fd)
 
-            avger += [p1, p2, 0, time.time() - stt] 
+            avger += [p1, p2, p3, time.time() - stt] 
 
             if i % show_step == 0 and i != 0: 
                 avger /= show_step
@@ -150,10 +159,13 @@ if __name__=='__main__':
                         .format(cur_epoch, args.max_epoch))
                 print ('Training - ACC: {:.3f} '
                     '| LOSS: {:.3f}   '
+                    '| logit df: {:.3f}'
                     '| lr : {:.3f}    '
                     '| in {:.2f} secs '\
                     .format(avger[0], 
-                        avger[1], lr, avger[3]*show_step))
+                        avger[1], 
+                        avger[2],
+                        lr, avger[3]*show_step))
                 validate(testnet, test_dataset)
                 avger[:] = 0
 

@@ -9,7 +9,7 @@ import pdb
 
 from lib.episode_generator import BatchGenerator
 from lib.utils import lr_scheduler, l2_loss
-from net import AdapterNet
+from net import ConvNet
 from config.loader import load_config
 
 def parse_args():
@@ -33,7 +33,6 @@ def parse_args():
     parser.add_argument('--epl', dest='epoch_list', default='0.5,0.8')
     parser.add_argument('--aug', dest='aug', default=0, type=int)
     parser.add_argument('--wd', dest='weight_decay', default=0.0005, type=float)
-    parser.add_argument('--na', dest='n_adapt', default=2, type=int)
     args = parser.parse_args()
     return args
 
@@ -56,12 +55,13 @@ def validate(net, dataset):
 if __name__=='__main__': 
     args = parse_args() 
     if args.arch=='simple':
-        args.lr = 1e-3
-        args.epoch_list = '0.7'
-    elif args.arch=='res':
-        args.lr = 1e-1
-        args.lr_decay = 0.2
-        args.epoch_list = '0.3,0.6,0.8'
+        args.lr = 1e-2
+        args.lr_decay = 0.1
+        args.epoch_list = '0.5,0.8'
+    elif args.arch=='vgg':
+        args.lr = 1e-2
+        args.lr_decay = 0.1
+        args.epoch_list = '0.5,0.8'
     else: 
         print ('somethings wrong')
         exit()
@@ -72,46 +72,41 @@ if __name__=='__main__':
     print ('args::') 
     for arg in vars(args):
         print ('%15s: %s'%(arg, getattr(args, arg)))
-    use_adapt = 0
-    fixed_univ = False
     print ('='*50) 
 
     dataset = BatchGenerator(args.dataset_dir, 'train', config)
     test_dataset = BatchGenerator(args.dataset_dir, 'test', config)
     lr_ph = tf.placeholder(tf.float32) 
 
-    trainnet = AdapterNet(args.model_name, dataset.n_classes,
-            isTr=True, config=config, n_adapt=args.n_adapt, arch=args.arch,
-            use_adapt=use_adapt, fixed_univ=fixed_univ)
-    testnet = AdapterNet(args.model_name, dataset.n_classes, reuse=True,
-            isTr=False, config=config, n_adapt=args.n_adapt, arch=args.arch,
-            use_adapt=use_adapt)
+    trainnet = ConvNet(args.model_name, dataset.n_classes,
+            isTr=True, config=config, arch=args.arch)
+    testnet = ConvNet(args.model_name, dataset.n_classes, reuse=True,
+            isTr=False, config=config, arch=args.arch)
     
-    if args.arch=='simple':
-        opt = tf.train.AdamOptimizer(lr_ph)
-    else:
-        opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
+    opt = tf.train.MomentumOptimizer(lr_ph, 0.9)
+    #opt = tf.train.AdamOptimizer(lr_ph)
     decay_epoch = [int(float(e)*args.max_epoch) for e in args.epoch_list.split(',')]
     
-    update_var_list = trainnet.var_list
-    wd_loss = tf.add_n([tf.nn.l2_loss(v) for v in update_var_list]) \
-            * args.weight_decay
+    wd_loss = 0 #l2_loss() * args.weight_decay
     update_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_op):
-        train_op = opt.minimize(trainnet.outputs['loss'] + wd_loss, 
-                var_list=update_var_list) 
+        train_op = opt.minimize(trainnet.outputs['loss'] + wd_loss) 
     saver = tf.train.Saver()
     
-    # get # of params
-    num_params = 0
-    for i, v in enumerate(update_var_list):
-        shape = v.get_shape()
-        nv = 1
-        for dim in shape:
-            nv *= dim.value
-        num_params += nv
-        print (i, v.name.replace(args.model_name,''), v.shape)
-    print ('TOTAL NUM OF PARAMS: {}'.format(num_params))
+#    # get # of params
+#    num_params = 0
+#    for i, v in enumerate(update_var_list):
+#        shape = v.get_shape()
+#        nv = 1
+#        for dim in shape:
+#            nv *= dim.value
+#        num_params += nv
+#        print (i, v.name.replace(args.model_name,''), v.shape)
+#    print ('TOTAL NUM OF PARAMS: {}'.format(num_params))
+
+    vs = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    for i,v in enumerate(vs):
+        print (i,v)
     
     gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))

@@ -84,6 +84,25 @@ class GroupConv(object):
         y = tf.concat(y_group, axis=1)
         return y
 
+class SS(object):
+    def __init__(self, shape, name, reuse=None, use_bias=False):
+        with tf.variable_scope(name, reuse=reuse):
+            with tf.device('/cpu:0'):
+                self.W = tf.get_variable('W',
+                        shape=shape, initializer=tf.ones_initializer())
+                if use_bias:
+                    self.b = tf.get_variable('b', shape=shape[-1], 
+                            initializer=tf.zeros_initializer())
+        self.use_bias = use_bias
+        self.name = name
+
+    def __call__(self):
+        if self.use_bias:
+            return (self.W, self.b)
+        else:
+            return (self.W, 0)
+
+
 class Conv(object):
     def __init__(self, n_in, n_out, kernel_size, strides=1, padding='VALID',
                     name='conv', reuse=None, use_bias=False):
@@ -97,8 +116,14 @@ class Conv(object):
         self.strides = strides
         self.padding = padding
 
-    def __call__(self, x, activation=None, use_bias=False):
-        x = tf.nn.conv2d(x, self.W,
+    def __call__(self, x, activation=None, use_bias=False, SS=None):
+        if SS is not None:
+            w,b = SS()
+            WW = w * self.W
+        else:
+            WW = self.W
+
+        x = tf.nn.conv2d(x, WW,
                 strides=[1, 1, self.strides, self.strides],
                 padding=self.padding,
                 data_format='NCHW')

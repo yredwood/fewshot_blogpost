@@ -22,29 +22,50 @@ mkdir -p ../models/${name}
 
 
 cconfig="miniImagenet"
+arch="res"
 function ftest(){
     CUDA_VISIBLE_DEVICES=7 python metalearning.py --gpuf 0.91 \
-        --config $cconfig --qs 15 --nw 5 --ks 5 \
-        --mbsize 1 --aug 0 --fix_univ 0 --use_adapt 1 \
-        --tr 0 --vali 600 --name $1 --pr none
+        --config $cconfig --qs 15 --nw 5 --ks 1 \
+        --mbsize 1 --aug 0 --fix_univ 0 --use_adapt 0 \
+        --tr 0 --vali 600 --name $1 --pr none --arch $arch
 }
 
 function ftrain(){
     CUDA_VISIBLE_DEVICES=$1 python metalearning.py --gpuf 0.91 --lr 0.001 \
-        --config $cconfig --qs 15 --mbsize 1 --aug 0 --fix_univ 1 \
-        --use_adapt 1 --maxe $2 --nw $3 --ks $4 --name $5 --pr $6 
+        --config $cconfig --qs 50 --mbsize 1 --aug 0 --fix_univ 0 --arch $arch \
+        --use_adapt 0 --maxe $2 --nw $3 --ks $4 --name $5 --pr $6 
 }
 
+
 # ------------------------------------------------------------------------
+
 N=5
-K=5
+K=1
 P="../models/AdaptNet_cl_miniImagenet_aug1/cl_miniImagenet.ckpt"
-#P="../models/Cur_miniImagenet_155n/miniImagenet.ckpt"
-name=Cur_${cconfig}_${M}${N}${K}
+P="../models/AdaptNet_cl_miniImagenet_aug1_res/cl_miniImagenet.ckpt"
+#P=none
+if [ "$P" = "none" ]; then
+    postfix=None
+else
+    postfix=Pretrained
+fi 
+name=Cur_${cconfig}_${arch}_${M}${N}${K}_${postfix}
 
 # step 1 
-ftrain 6 50 $N $K $name $P
-#ftest $name
+#ftrain 5 50 $N $K $name $P
+
+#N=5
+#K=1
+#P="../models/Cur_miniImagenet_res_121_Pretrained"
+#name=Cur_${cconfig}_${arch}_${M}${N}${K}_${postfix}
+#ftrain 4 100 $N $K $name $P
+ftest $name
+
+
+
+
+
+
 
 ## step 2
 #P=../models/${name}/miniImagenet.ckpt

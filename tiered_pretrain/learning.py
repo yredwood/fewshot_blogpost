@@ -42,8 +42,7 @@ def parse_args():
 def validate(net, dataset):
     accs, losss = [], [] 
     for i in range(args.val_iter):
-        x, y = dataset.get_batch(args.batch_size, 'val')
-        fd = {net.inputs['x']: x, net.inputs['y']: y}
+        #fd = {net.inputs['x']: x, net.inputs['y']: y}
         runs = [net.outputs['acc'], net.outputs['loss']]
         acc, loss = sess.run(runs, fd)
         accs.append(acc)
@@ -162,8 +161,8 @@ if __name__=='__main__':
 
             avger += [p1, p2, 0, time.time() - stt] 
             #print (p1, p2, time.time()-stt)
-            print ('expect time : {:.3f}'.format(\
-                    (time.time()-stt) * train_dataset.n_images))
+#            print ('expect time : {:.3f}'.format(\
+#                    (time.time()-stt) * train_dataset.n_images))
 
             if i % show_step == 0 and i != 0: 
                 avger /= show_step

@@ -70,14 +70,14 @@ class ConvNet(Network):
             print ('No such architecture')
             exit()
 
-        self.alpha = tf.get_variable('h_alpha',  
-                initializer=[1.])
+#        self.alpha = tf.get_variable('h_alpha',  
+#                initializer=[1.])
             
     def _build_network(self, isTr, reuse):
         x = tf.transpose(self.inputs['x'], [0,3,1,2])
         f = self.net(x, isTr)
     
-        pred = self.dense(f, self.nway, name='trtask_dense', reuse=reuse)
+        pred = self.dense(f, self.nway, name='11trtask_dense', reuse=reuse)
         loss = cross_entropy(tf.nn.softmax(pred), self.inputs['y'])
         acc = tf_acc(pred, self.inputs['y'])
 
@@ -90,7 +90,6 @@ class ConvNet(Network):
 
         def cnn(in_x, isTr, reuse):
             x = tf.transpose(in_x, [0,3,1,2])
-            #f = self.net(x, isTr)
             f = self.net(x, isTr)  
 #            f = self.dense(f, 64, name='trtask_dense', reuse=reuse) 
 ##            f = self.dense(f, 512, name='new_dense', reuse=reuse)

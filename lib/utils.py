@@ -47,3 +47,14 @@ def op_restore_possible_vars(loc, print_details=False):
                 print ('--{} is not in the pretrained model. Not restored'\
                         .format(vname))
     return assign_op
+
+
+def cluster_config(path, pn=None):
+    out = np.load(path)
+    if pn is not None:
+        if pn >= len(out):
+            print ('Invalid pn -- only {} clusters included'.format(len(out)))
+            exit()
+        return out[pn]
+    else:
+        return out

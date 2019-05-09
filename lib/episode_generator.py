@@ -62,14 +62,18 @@ class EpisodeGenerator():
             onehot=True, 
             printname=False, 
             normalize=True,
-            aug=False):
+            aug=False,
+            trg_class=None):
 
         if (dataset_name is None) or (dataset_name=='multiple'):
             dataset_name = self.dataset_list[np.random.randint(len(self.dataset_list))] 
         if printname:
             print (dataset_name)
         dd = self.dataset[dataset_name]
-        random_class = np.random.choice(len(dd), size=nway, replace=False)
+        if trg_class is None:
+            random_class = np.random.choice(len(dd), size=nway, replace=False)
+        else:
+            random_class = trg_class
         support_set_data = []; query_set_data = []
         support_set_label = []; query_set_label = []
         

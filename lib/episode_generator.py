@@ -40,7 +40,7 @@ def augmentation(img, hw, pad):
 
 class EpisodeGenerator(): 
     def __init__(self, data_dir, phase, config):
-        if phase.upper() in ['TRAIN', 'VALID', 'TEST']:
+        if phase.upper() in ['TRAIN', 'VAL', 'TEST']:
             self.dataset_list = config['{}_DATASET'.format(phase.upper())]
         else:
             raise ValueError('select from train/test/val')
@@ -74,6 +74,7 @@ class EpisodeGenerator():
             random_class = np.random.choice(len(dd), size=nway, replace=False)
         else:
             random_class = trg_class
+            assert len(trg_class)==nway
         support_set_data = []; query_set_data = []
         support_set_label = []; query_set_label = []
         

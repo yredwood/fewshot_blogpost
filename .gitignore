@@ -2,6 +2,7 @@ models
 miniImagenet
 __pycache__/
 *.pyc
+*.npy
 
 models/
 data_npy/

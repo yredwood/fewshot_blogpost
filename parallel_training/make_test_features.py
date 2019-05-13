@@ -97,68 +97,44 @@ if __name__=='__main__':
     kshot = args.kshot 
     qsize = args.qsize 
     test_kshot = args.kshot if args.test_kshot==0 else args.test_kshot
-    
-
 
     input_dict = {'x': tf.placeholder(tf.float32, [None,config['hw'],config['hw'],3]),
             'y': tf.placeholder(tf.float32, [None,None])}
        
     num_parallel = args.parall_n
-    nets = [[] for _ in range(num_parallel)]
-    feats = [[] for _ in range(num_parallel)]
-    loaders = [[] for _ in range(num_parallel)]
-
-#    task_list = [22, 57, 71, 72, 84, 87, 91, 106, 110, 142, 150, 179, 192]
-#    task_list = [ 29,  43,  59,  71,  79, 112, 128, 135, 164, 183]
-#    task_list = \
-#            [  9,  11,  12,  17,  18,  21,  22,  26,  34,  59, 129, 144]
-#    task_list = task_list[:num_parallel]   
-    task_list = np.arange(num_parallel)
-
-    for i, ti in enumerate(task_list):
-        nets[i] = ConvNet(args.model_name+'_{}'.format(ti),
-                isTr=False, reuse=False, config=config, arch=args.arch, nway=len(trg_classes[ti]),
-                input_dict=input_dict)
-        feats[i] = nets[i].outputs['pred']
-        tnvars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
-                scope=args.model_name+'_{}/*'.format(ti))
-        loaders[i] = tf.train.Saver(tnvars)
-
-
-#    saver = tf.train.Saver()
-    sess = tf.Session()
+    net = ConvNet(args.model_name+'_{}'.format(num_parallel),
+            isTr=False, reuse=False, config=config, arch=args.arch, nway=len(trg_classes[num_parallel]),
+            input_dict=input_dict)
+    feats = net.outputs['pred']
+    tnvars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+            scope=args.model_name+'_{}/*'.format(num_parallel))
+    loader = tf.train.Saver(tnvars)
+    
+    gpu_option = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_frac)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_option))
     sess.run(tf.global_variables_initializer())
     
     if not args.train:
-        for i, ti in enumerate(task_list):
-            loc = os.path.join(args.model_dir,
-                    args.model_name+'_{}'.format(ti),
-                    args.config + '.ckpt')
-            print ('restored from {}'.format(loc))
-            loaders[i].restore(sess, loc)
+        loc = os.path.join(args.model_dir,
+                args.model_name+'_{}'.format(num_parallel),
+                args.config + '.ckpt')
+        print ('restored from {}'.format(loc))
+        loader.restore(sess, loc)
+    
+    test_gen = EpisodeGenerator(args.dataset_dir, 'val', config)
 
     
-    test_gen = EpisodeGenerator(args.dataset_dir, 'test', config)
-
-    acc = []
+    accs = []
     for _ in range(args.val_iter):
         sx, sy, qx, qy = test_gen.get_episode(args.nway, test_kshot, 15)
         fd = {input_dict['x']: sx}
         supports_list = sess.run(feats, fd)
-        supports = np.concatenate(supports_list, axis=1)
-
         fd = {input_dict['x']: qx}
         preds_list = sess.run(feats, fd)
-        preds = np.concatenate(preds_list, axis=1)
-
-        sim_mat = cos_sim(preds, supports, args.nway, supports.shape[-1])
-        #sim_mat = protonet(preds, supports, args.nway, 20*num_parallel)
-        #rprd = [sy[sm] for sm in np.argmax(sim_mat, 1)]
-
-        _acc = np.mean(np.argmax(sim_mat, 1) == np.argmax(qy, 1))
-        acc.append(_acc)
-    print ('Acc: {:.3f}  ({:.3f})'.format(\
-            np.mean(acc)*100., 
-            np.std(acc)*100.*1.96/np.sqrt(args.val_iter)))
-    np.save('clusters/task_features/f{}.npy'.format(args.parall_n), 
-            np.array(acc))
+        
+        
+        sim_mat = cos_sim(preds_list, supports_list, args.nway, preds_list.shape[-1])
+        acc = np.mean(np.argmax(sim_mat, 1) == np.argmax(qy, 1))
+        accs.append(acc)
+    np.save('clusters/task_features/f{}.npy'.format(num_parallel), np.array(accs))
+    print ('saved f{}.npy'.format(num_parallel))

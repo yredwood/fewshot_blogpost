@@ -15,13 +15,14 @@ DEPTH = 3
 #LABEL_BYTES = 2
 
 class TieredImageNet(object):
-    def __init__(self, name, data_dir):
+    def __init__(self, name, data_dir, class_config=None):
         self.name = name
         self.data_dir = data_dir
 
         self.height = HEIGHT
         self.width = WIDTH
         self.depth = DEPTH
+        self.class_config = class_config
 
         self.dataset = self._load_dataset()
 
@@ -29,6 +30,16 @@ class TieredImageNet(object):
         filenames = os.listdir(self.data_dir)
         self.labels = [int(fn.split('_')[0].replace('C','')) for fn in filenames]
         self.filenames = [os.path.join(self.data_dir, fn) for fn in filenames]
+
+        if self.class_config is not None:
+            newlabels = []
+            newfiles = []
+            for idx, lb in enumerate(self.labels):
+                if lb in self.class_config:
+                    newlabels.append(self.labels[idx])
+                    newfiles.append(self.filenames[idx])
+            self.labels = [int(np.where(self.class_config == nlb)[0]) for nlb in newlabels]
+            self.filenames = newfiles
 
         self.n_classes = len(np.unique(self.labels))
         self.n_images = len(self.labels)
@@ -43,7 +54,7 @@ class TieredImageNet(object):
             return img_std, tf.one_hot(label, self.n_classes)
 
         dataset = tf.data.Dataset.from_tensor_slices((path, label))
-        dataset = dataset.map(preprocess)
+        dataset = dataset.map(preprocess, num_parallel_calls=128)
 
         return dataset
 
@@ -64,8 +75,8 @@ class TieredImageNet(object):
     def input_fn(self, batch_size, train_mode):
         dataset = self.dataset
         if train_mode:
-            dataset = dataset.map(self.augment, num_parallel_calls=20)
-            dataset = dataset.shuffle(buffer_size=2000).repeat().batch(batch_size)
+            dataset = dataset.map(self.augment, num_parallel_calls=128)
+            dataset = dataset.shuffle(buffer_size=10000).repeat().batch(batch_size)
         else:
             dataset = dataset.repeat().batch(batch_size)
         

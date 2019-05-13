@@ -4,22 +4,24 @@ K=500 # k-shot
 M=1
 Q=100
 
-cconfig="miniImagenet"
-arch="simple"
+cconfig="tieredImagenet"
+arch="wdres"
 meta_arch="proto"
 #cluster_npy="cconfig20.npy"
-cluster_npy="cconfig_random25.npy"
+cluster_npy="tsklist_random_tiered100w.npy"
 function ftest(){
     CUDA_VISIBLE_DEVICES=6 python metalearning.py --gpuf 0.91 \
         --config $cconfig --qs 15 --nw 5 --ks 1 --mbsize 1 \
-        --tr 0 --vali 600 --name $1 --pr none --arch $arch --meta_arch $meta_arch
+        --tr 0 --vali 600 --name $1 --pr none --arch $arch --meta_arch $meta_arch \
+        --batch_size 128
 }
 
 function ftrain(){
     CUDA_VISIBLE_DEVICES=$1 python metalearning.py --gpuf 0.91 --vali 100 \
         --config $cconfig --qs $Q --mbsize $M --aug 0 --arch $arch --meta_arch $meta_arch \
         --maxe $2 --nw $3 --ks $4 --name $5 --lr $6 --epl $7 --pr $8 --pn $9 \
-        --cl clusters/$cluster_npy
+        --cl clusters/$cluster_npy \
+        --batch_size 128
 }
 
 
@@ -62,8 +64,8 @@ fi
 name=Metalearn_${cconfig}_${arch}_${M}${N}${K}_${postfix}_${cluster_npy}
 
 
-pn=19
-gpu=$(( $pn - 14 ))
+pn=2
+gpu=$(( $pn - 0 ))
 #gpu=$pn
 # step 1 
 ftrain $gpu 100 $N $K $name $LR $EL $P $pn

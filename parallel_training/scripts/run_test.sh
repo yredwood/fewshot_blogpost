@@ -1,17 +1,18 @@
 N=5
-K=5
+K=1
 Q=15
 
 #P="../models/Metalearn_miniImagenet_simple_120500_Pretrained_1e-3_1/miniImagenet.ckpt"
 #P="none"
-C="miniImagenet"
-Ar="simple"
+C="tieredImagenet"
+Ar="wdres"
 MAr="proto"
-cluster_npy="cconfig_random25.npy"
-pnt=20
+#cluster_npy="tsklist_random_large20w.npy"
+cluster_npy="tsklist_random_tiered100w.npy"
+pnt=3
 #gpu=$(( $pnt - 6 ))
 #gpu=$pnt
-gpu=1
+gpu=7
 echo $gpu
 
 name=Metalearn_${C}_${Ar}_120500_Pretrained_${cluster_npy}
